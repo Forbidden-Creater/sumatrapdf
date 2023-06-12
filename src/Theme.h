@@ -1,11 +1,6 @@
 /* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
 License: GPLv3 */
 
-#ifndef SUMATRA_THEME
-#define SUMATRA_THEME
-
-#if defined(ENABLE_THEME)
-
 #include "utils/BaseUtil.h"
 
 // The number of themes
@@ -14,6 +9,8 @@ License: GPLv3 */
 struct MainWindowStyle {
     // Background color of recently added, about, and properties menus
     COLORREF backgroundColor;
+    // Background color of controls, menus, non-client areas, etc.
+    COLORREF controlBackgroundColor;
     // Text color of recently added, about, and properties menus
     COLORREF textColor;
     // Link color on recently added, about, and properties menus
@@ -61,8 +58,8 @@ struct TabStyle {
 struct TabTheme {
     // Height of the tab bar
     int height;
-    // Style of the current file tab
-    TabStyle current;
+    // Style of the selected tab
+    TabStyle selected;
     // Style of background tabs
     TabStyle background;
     // Style of the highlighted tab (hovered over)
@@ -79,7 +76,7 @@ struct TabTheme {
 
 struct Theme {
     // Name of the theme
-    char* name;
+    const char* name;
     // Style of the main window
     MainWindowStyle mainWindow;
     // Style of documents
@@ -88,7 +85,12 @@ struct Theme {
     TabTheme tab;
     // Style of notifications
     NotificationStyle notifications;
+    // Whether or not we colorize standard Windows controls and window areas
+    bool colorizeControls;
 };
+
+extern Theme* currentTheme;
+void CycleNextTheme();
 
 // Function definitions
 Theme* GetThemeByName(char* name);
@@ -98,6 +100,8 @@ Theme* GetCurrentTheme();
 int GetThemeIndex(Theme* theme);
 int GetCurrentThemeIndex();
 
-#endif
-
-#endif // !THEME
+// These functions take into account both gPrefs and the theme.
+// Access to these colors must go through them until everything is
+// configured through themes.
+void GetDocumentColors(COLORREF& text, COLORREF& bg);
+COLORREF GetMainWindowBackgroundColor();

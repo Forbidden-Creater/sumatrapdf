@@ -644,12 +644,14 @@ using Gdiplus::PathData;
 #define kTabMinDx 100
 
 struct TabsCtrl;
+struct TabInfo;
 
 #define kTabDefaultBgCol (COLORREF) - 1
 
 struct TabMouseState {
     int tabIdx = -1;
     bool overClose = false;
+    TabInfo* tabInfo = nullptr;
 };
 
 struct TabClosedEvent {
@@ -674,6 +676,14 @@ struct TabsSelectionChangedEvent {
 
 using TabsSelectionChangedHandler = std::function<void(TabsSelectionChangedEvent*)>;
 
+struct TabMigrationEvent {
+    TabsCtrl* tabs = nullptr;
+    int tabIdx;
+    Point releasePoint;
+};
+
+using TabMigrationHandler = std::function<void(TabMigrationEvent*)>;
+
 struct TabDraggedEvent {
     TabsCtrl* tabs = nullptr;
     int tab1 = -1;
@@ -694,6 +704,7 @@ struct TabInfo {
     char* text = nullptr;
     char* tooltip = nullptr;
     bool isPinned = false;
+    bool canClose = true; // TODO: same as !isPinned?
     UINT_PTR userData = 0;
 
     TabInfo() = default;
@@ -704,13 +715,13 @@ struct TabInfo {
     Rect rClose;
     Size titleSize;
     Point titlePos;
-
 };
 
 struct TabsCtrl : Wnd {
     int ctrlID = 0;
     bool withToolTips = false;
     bool inTitleBar = false;
+    bool draggingTab = false;
     // dx of tab if there's more space available
     int tabDefaultDx = 300;
 
@@ -721,14 +732,16 @@ struct TabsCtrl : Wnd {
     int tabHighlightedClose = -1;
     int tabBeingClosed = -1;
     Point lastMousePos;
+    // where we grabbed the tab with a leftclick, in tab coordinates
+    Point grabLocation;
 
     TabClosedHandler onTabClosed = nullptr;
     TabsSelectionChangingHandler onSelectionChanging = nullptr;
     TabsSelectionChangedHandler onSelectionChanged = nullptr;
+    TabMigrationHandler onTabMigration = nullptr;
     TabDraggedHandler onTabDragged = nullptr;
 
-    // TODO: set those to reasonable defaults
-    COLORREF currBgCol = kTabDefaultBgCol;
+    COLORREF currBgCol = 0;
     COLORREF tabBackgroundBg = 0;
     COLORREF tabBackgroundText = 0;
     COLORREF tabBackgroundCloseX = 0;
@@ -763,7 +776,7 @@ struct TabsCtrl : Wnd {
 
     void SetTextAndTooltip(int idx, const char* text, const char* tooltip);
 
-    int GetTabCount();
+    int TabCount();
 
     UINT_PTR RemoveTab(int idx);
 
@@ -780,8 +793,10 @@ struct TabsCtrl : Wnd {
     HWND GetToolTipsHwnd();
 
     void Layout();
+    void ScheduleRepaint();
     TabMouseState TabStateFromMousePosition(const Point& p);
     void Paint(HDC hdc, RECT& rc);
+    HBITMAP RenderForDragging(int idx);
 };
 
 template <typename T>

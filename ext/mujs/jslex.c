@@ -217,7 +217,7 @@ static void textpush(js_State *J, Rune c)
 	if (c == EOF)
 		J->lexbuf.text[J->lexbuf.len++] = 0;
 	else
-	J->lexbuf.len += runetochar(J->lexbuf.text + J->lexbuf.len, &c);
+		J->lexbuf.len += runetochar(J->lexbuf.text + J->lexbuf.len, &c);
 }
 
 static char *textend(js_State *J)

@@ -22,6 +22,16 @@ bool ToBool(BOOL b) {
     return b ? true : false;
 }
 
+Size BlittableBitmap::GetSize() {
+    return size;
+}
+
+RenderedBitmap::RenderedBitmap(HBITMAP hbmp, Size size, HANDLE hMap) {
+    this->hbmp = hbmp;
+    this->hMap = hMap;
+    this->size = size;
+}
+
 RenderedBitmap::~RenderedBitmap() {
     if (IsValidHandle(hbmp)) {
         DeleteObject(hbmp);
@@ -36,18 +46,18 @@ RenderedBitmap* RenderedBitmap::Clone() const {
     return new RenderedBitmap(hbmp2, size);
 }
 
+bool RenderedBitmap::IsValid() {
+    return hbmp != nullptr;
+}
+
 // render the bitmap into the target rectangle (streching and skewing as requird)
-bool RenderedBitmap::StretchDIBits(HDC hdc, Rect target) const {
+bool RenderedBitmap::Blit(HDC hdc, Rect target) {
     return BlitHBITMAP(hbmp, hdc, target);
 }
 
 // callers must not delete this (use Clone if you have to modify it)
 HBITMAP RenderedBitmap::GetBitmap() const {
     return hbmp;
-}
-
-Size RenderedBitmap::Size() const {
-    return size;
 }
 
 void EditSelectAll(HWND hwnd) {
@@ -240,6 +250,10 @@ bool IsOs64() {
     return IsProcess64() || IsRunningInWow64();
 }
 
+bool IsArmBuild() {
+    return IS_ARM_64 == 1;
+}
+
 // return true if OS and our process have the same arch (i.e. both are 32bit
 // or both are 64bit)
 bool IsProcessAndOsArchSame() {
@@ -251,6 +265,17 @@ void LogLastError(DWORD err) {
     if (0 == err) {
         err = GetLastError();
     }
+
+    if (err == ERROR_INTERNET_EXTENDED_ERROR) {
+        char buf[4096] = {0};
+        DWORD bufSize = dimof(buf);
+        // TODO: ignoring a case where buffer is too small. 4 kB should be enough for everybody
+        InternetGetLastResponseInfoA(&err, buf, &bufSize);
+        buf[4095] = 0;
+        logf("InternetGetLastResponseInfoA: %s\n", buf);
+        return;
+    }
+
     char* msgBuf = nullptr;
     DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
     DWORD lang = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT);
@@ -1321,6 +1346,22 @@ HFONT GetDefaultGuiFontOfSize(int size) {
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
     ncm.lfMessageFont.lfHeight = -size;
+    HFONT fnt = CreateFontIndirectW(&ncm.lfMessageFont);
+    return fnt;
+}
+
+HFONT GetUserGuiFont(int size, int weightOffset, char* fontName) {
+    NONCLIENTMETRICS ncm = {};
+    ncm.cbSize = sizeof(ncm);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    ncm.lfMessageFont.lfHeight = -size;
+    if (fontName && !str::EqI(fontName, "automatic")) {
+        TempWstr fontNameW = ToWstrTemp(fontName);
+        WCHAR* dest = ncm.lfMessageFont.lfFaceName;
+        int cchDestBufSize = dimof(ncm.lfMessageFont.lfFaceName);
+        StrCatBuffW(dest, fontNameW, cchDestBufSize);
+    }
+    ncm.lfMessageFont.lfWeight += weightOffset;
     HFONT fnt = CreateFontIndirectW(&ncm.lfMessageFont);
     return fnt;
 }
@@ -2697,6 +2738,11 @@ void DrawCenteredText(HDC hdc, const Rect r, const WCHAR* txt, bool isRTL) {
         format |= DT_RTLREADING;
     }
     DrawTextW(hdc, txt, -1, &tmpRect, format);
+}
+
+void DrawCenteredText(HDC hdc, const Rect r, const char* txt, bool isRTL) {
+    TempWstr ws = ToWstrTemp(txt);
+    DrawCenteredText(hdc, r, ws, isRTL);
 }
 
 void DrawCenteredText(HDC hdc, const RECT& r, const WCHAR* txt, bool isRTL) {

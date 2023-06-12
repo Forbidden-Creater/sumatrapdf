@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kjk/common/u"
@@ -116,15 +118,9 @@ type BuildOptions struct {
 	releaseBuild              bool
 }
 
-func ensureSpacesCreds() {
-	panicIf(os.Getenv("SPACES_KEY") == "", "Not uploading to do spaces because SPACES_KEY env variable not set\n")
-	panicIf(os.Getenv("SPACES_SECRET") == "", "Not uploading to do spaces because SPACES_SECRET env variable not set\n")
-}
-
 func ensureAllUploadCreds() {
-	ensureSpacesCreds()
-	panicIf(os.Getenv("AWS_ACCESS") == "", "Not uploading to s3 because AWS_ACCESS env variable not set\n")
-	panicIf(os.Getenv("AWS_SECRET") == "", "Not uploading to s3 because AWS_SECRET env variable not set\n")
+	panicIf(os.Getenv("R2_ACCESS") == "", "Not uploading to s3 because R2_ACCESS env variable not set\n")
+	panicIf(os.Getenv("R2_SECRET") == "", "Not uploading to s3 because R2_SECRET env variable not set\n")
 	panicIf(os.Getenv("BB_ACCESS") == "", "Not uploading to backblaze because BB_ACCESS env variable not set\n")
 	panicIf(os.Getenv("BB_SECRET") == "", "Not uploading to backblaze because BB_SECRET env variable not set\n")
 }
@@ -158,12 +154,7 @@ func ensureBuildOptionsPreRequesites(opts *BuildOptions) {
 }
 
 func main() {
-	if dirExists("/opt/buildhome/repo") {
-		// on Cloudflare pages build machine
-		os.Chdir("/opt/buildhome/repo")
-	} else {
-		cdUpDir("sumatrapdf")
-	}
+	cdUpDir("sumatrapdf")
 	logf(ctx(), "Current directory: %s\n", currDirAbsMust())
 	timeStart := time.Now()
 	defer func() {
@@ -205,6 +196,8 @@ func main() {
 		flgSmoke           bool
 		flgFileUpload      string
 		flgFilesList       bool
+		flgExtractUtils    bool
+		flgBuildLogview    bool
 	)
 
 	{
@@ -237,7 +230,14 @@ func main() {
 		flag.BoolVar(&flgDrMem, "drmem", false, "run drmemory of rel 64")
 		flag.BoolVar(&flgLogView, "logview", false, "run logview")
 		flag.BoolVar(&flgRunTests, "run-tests", false, "run test_util executable")
+		flag.BoolVar(&flgExtractUtils, "extract-utils", false, "extract utils")
+		flag.BoolVar(&flgBuildLogview, "build-logview", false, "build logview-win. Use -upload to also upload it to backblaze")
 		flag.Parse()
+	}
+
+	if flgExtractUtils {
+		extractUtils(flgCIBuild)
+		return
 	}
 
 	detectVersions()
@@ -264,6 +264,14 @@ func main() {
 
 	if flgFileUpload != "" {
 		fileUpload(flgFileUpload)
+		return
+	}
+
+	if flgBuildLogview {
+		buildLogView()
+		if flgUpload {
+			uploadLogView()
+		}
 		return
 	}
 
@@ -324,7 +332,7 @@ func main() {
 	}
 
 	if flgClean {
-		clean()
+		cleanPreserveSettings()
 		return
 	}
 
@@ -378,50 +386,51 @@ func main() {
 	}
 
 	if flgCIDailyBuild {
-		buildDaily()
-		return
-	}
-
-	if flgCIBuild {
-		gev := getGitHubEventType()
-		switch gev {
-		case githubEventPush:
-			buildPreRelease()
-		case githubEventTypeCodeQL:
-			// code ql is just a regular build, I assume intercepted by
-			// by their tooling
-			buildSmoke()
-		default:
-			panic("unkown value from getGitHubEventType()")
+		buildCiDaily()
+		if opts.upload {
+			uploadToStorage(buildTypePreRel)
+		} else {
+			logf(ctx(), "uploadToStorage: skipping because opts.upload = false\n")
 		}
 		return
 	}
 
 	// on GitHub Actions the build happens in an earlier step
 	if flgUploadCiBuild {
-		gev := getGitHubEventType()
-		switch gev {
-		case githubEventPush:
-			// pre-release build on push
-			uploadToStorage(opts, buildTypePreRel)
-		case githubEventTypeCodeQL:
-			// do nothing
-		default:
-			panic("unkown value from getGitHubEventType()")
+		// pre-release build on push
+		uploadToStorage(buildTypePreRel)
+		return
+	}
+
+	if flgCIBuild {
+		buildCi()
+		if opts.upload {
+			uploadToStorage(buildTypePreRel)
+		} else {
+			logf(ctx(), "uploadToStorage: skipping because opts.upload = false\n")
 		}
 		return
 	}
 
 	if flgBuildRelease {
 		buildRelease()
-		uploadToStorage(opts, buildTypeRel)
+		if opts.upload {
+			uploadToStorage(buildTypeRel)
+		} else {
+			logf(ctx(), "uploadToStorage: skipping because opts.upload = false\n")
+		}
 		return
 	}
 
+	// this one is typically for me to build locally, so build all projects
 	if flgBuildPreRelease {
-		// make sure we can sign the executables
-		buildPreRelease()
-		uploadToStorage(opts, buildTypePreRel)
+		cleanReleaseBuilds()
+		buildPreRelease(kPlatformIntel64, true)
+		if opts.upload {
+			uploadToStorage(buildTypePreRel)
+		} else {
+			logf(ctx(), "uploadToStorage: skipping because opts.upload = false\n")
+		}
 		return
 	}
 
@@ -432,7 +441,7 @@ func main() {
 	}
 
 	if flgDrMem {
-		buildJustPortableExe(rel64Dir, "Release", "x64")
+		buildJustPortableExe(rel64Dir, "Release", kPlatformIntel64)
 		//cmd := exec.Command("drmemory.exe", "-light", "-check_leaks", "-possible_leaks", "-count_leaks", "-suppress", "drmem-sup.txt", "--", ".\\out\\rel64\\SumatraPDF.exe")
 		cmd := exec.Command("drmemory.exe", "-leaks_only", "-suppress", "drmem-sup.txt", "--", ".\\out\\rel64\\SumatraPDF.exe")
 		runCmdLoggedMust(cmd)
@@ -440,16 +449,7 @@ func main() {
 	}
 
 	if flgLogView {
-		pathSrc := filepath.Join("src", "tools", "logview.cpp")
-		dir := filepath.Join("out", "rel64")
-		path := filepath.Join(dir, "logview.exe")
-		needsRebuild := fileNewerThan(pathSrc, path)
-		if needsRebuild {
-			buildLogview()
-		}
-		cmd := exec.Command(".\\logview.exe")
-		cmd.Dir = dir
-		runCmdLoggedMust(cmd)
+		logView()
 		return
 	}
 
@@ -463,4 +463,62 @@ func main() {
 	}
 
 	flag.Usage()
+}
+
+func logView() {
+	cmd := exec.Command("go", "run", `.\tools\logview\`)
+	runCmdLoggedMust(cmd)
+}
+
+func cmdRunLoggedInDir(dir string, args ...string) {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	cmdRunLoggedMust(cmd)
+}
+
+var logViewWinDir = filepath.Join("tools", "logview-win")
+
+func buildLogView() {
+	ver := extractLogViewVersion()
+	logf(ctx(), "biuldLogView: ver: %s\n", ver)
+	os.RemoveAll(filepath.Join(logViewWinDir, "build", "bin"))
+	//cmdRunLoggedInDir(".", "wails", "build", "-clean", "-f", "-upx")
+	cmdRunLoggedInDir(logViewWinDir, "wails", "build", "-clean", "-f", "-upx")
+
+	path := filepath.Join(logViewWinDir, "build", "bin", "logview.exe")
+	panicIf(!u.FileExists(path))
+	signMust(path)
+	logf(ctx(), "\n")
+	printFileSize(path)
+}
+
+func extractLogViewVersion() string {
+	path := filepath.Join(logViewWinDir, "frontend", "src", "version.js")
+	d, err := os.ReadFile(path)
+	must(err)
+	d = u.NormalizeNewlinesInPlace(d)
+	s := string(d)
+	// s looks like:
+	// export const version = "0.1.2";
+	parts := strings.Split(s, "\n")
+	s = parts[0]
+	parts = strings.Split(s, " ")
+	panicIf(len(parts) != 5)
+	ver := parts[4] // "0.1.2";
+	ver = strings.ReplaceAll(ver, `"`, "")
+	ver = strings.ReplaceAll(ver, `;`, "")
+	parts = strings.Split(ver, ".")
+	panicIf(len(parts) < 2) // must be at least 1.0
+	// verify all elements are numbers
+	for _, part := range parts {
+		n, err := strconv.ParseInt(part, 10, 32)
+		panicIf(err != nil)
+		panicIf(n > 100)
+	}
+	return ver
+}
+
+func printFileSize(path string) {
+	size := u.FileSize(path)
+	logf(ctx(), "%s: %s\n", path, u.FormatSize(size))
 }

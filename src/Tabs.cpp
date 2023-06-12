@@ -67,7 +67,7 @@ static void ShowTabBar(MainWindow* win, bool show) {
 }
 
 void UpdateTabWidth(MainWindow* win) {
-    int nTabs = (int)win->TabsCount();
+    int nTabs = (int)win->TabCount();
     bool showSingleTab = gGlobalPrefs->useTabs || win->tabsInTitlebar;
     bool showTabs = (nTabs > 1) || (showSingleTab && (nTabs > 0));
     if (!showTabs) {
@@ -77,7 +77,7 @@ void UpdateTabWidth(MainWindow* win) {
     ShowTabBar(win, true);
 }
 
-void RemoveAndDeleteTab(WindowTab* tab) {
+void RemoveTab(WindowTab* tab) {
     UpdateTabFileDisplayStateForTab(tab);
     MainWindow* win = tab->win;
     win->tabSelectionHistory->Remove(tab);
@@ -88,16 +88,86 @@ void RemoveAndDeleteTab(WindowTab* tab) {
         win->ctrl = nullptr;
         win->currentTabTemp = nullptr;
     }
-    delete tab;
     UpdateTabWidth(win);
+
+    // if the removed tab was the current one, select another
+    if (win->TabCount() < 1) {
+        return;
+    }
+    WindowTab* curr = win->CurrentTab();
+    WindowTab* newCurrent = curr;
+    if (!curr || newCurrent == tab) {
+        // TODO(tabs): why do I need win->tabSelectionHistory.Size() > 0
+        if (win->tabSelectionHistory->Size() > 0) {
+            newCurrent = win->tabSelectionHistory->Pop();
+        } else {
+            newCurrent = win->GetTab(0);
+        }
+    }
+    int newIdx = win->GetTabIdx(newCurrent);
+    win->tabsCtrl->SetSelected(newIdx);
+    tab = win->CurrentTab();
+    LoadModelIntoTab(tab);
+}
+
+static void CloseWindowIfNoDocuments(MainWindow* win) {
+    for (auto& tab : win->Tabs()) {
+        if (!tab->IsAboutTab()) {
+            return;
+        }
+    }
+    // no tabs or only about tab
+    CloseWindow(win, true, true);
+}
+
+static void MigrateTab(WindowTab* tab, MainWindow* newWin) {
+    MainWindow* oldWin = tab->win;
+    RemoveTab(tab);
+
+    if (!newWin) {
+        newWin = CreateAndShowMainWindow(nullptr);
+        if (!newWin) {
+            return;
+        }
+    }
+
+    // TODO: we should be able to just slide the existing tab
+    // into the new window, preserving its controller and
+    // the entire state, but this crashes/renders badly etc.
+    // More work needed. The code that should work but doesn't:
+    // tab->win = newWin;
+    // newWin->currentTabTemp = AddTabToWindow(newWin, tab);
+    // newWin->ctrl = tab->ctrl;
+    // UpdateUiForCurrentTab(newWin);
+    // newWin->showSelection = tab->selectionOnPage != nullptr;
+    // SetFocus(newWin->hwndFrame);
+    // newWin->RedrawAll(true);
+    // TabsOnChangedDoc(newWin);
+    WindowTab* newTab = new WindowTab(newWin);
+    newTab->SetFilePath(tab->filePath);
+    newWin->currentTabTemp = AddTabToWindow(newWin, newTab);
+    LoadArgs args(tab->filePath, newWin);
+    args.forceReuse = true;
+    args.noSavePrefs = true;
+    LoadDocument(&args, false, false);
+    delete tab;
+
+    CloseWindowIfNoDocuments(oldWin);
 }
 
 // Selects the given tab (0-based index)
+// tabIndex can come from settings file so must be sanitized
 void TabsSelect(MainWindow* win, int tabIndex) {
     auto tabs = win->Tabs();
-    int count = tabs.Size();
-    if (count < 2 || tabIndex < 0 || tabIndex >= count) {
+    int nTabs = tabs.Size();
+    logf("TabsSelect: tabIndex: %d, nTabs: %d\n", tabIndex, nTabs);
+    if (nTabs == 0) {
+        logf("TabsSelect: skipping because nTabs = %d\n", nTabs);
         return;
+    }
+    if (tabIndex < 0 || tabIndex >= nTabs) {
+        tabIndex = 0;
+        logf("TabsSelect: fixing tabIndex to 0\n");
     }
     TabsCtrl* tabsCtrl = win->tabsCtrl;
     int currIdx = tabsCtrl->GetSelected();
@@ -158,11 +228,7 @@ static void ShowFileInFolder(WindowTab* tab) {
     if (!HasPermission(Perm::DiskAccess)) {
         return;
     }
-    DocController* ctrl = tab->ctrl;
-    if (!ctrl) {
-        return;
-    }
-    const char* path = ctrl->GetFilePath();
+    const char* path = tab->GetPath();
     if (!path) {
         return;
     }
@@ -170,6 +236,26 @@ static void ShowFileInFolder(WindowTab* tab) {
     const char* process = "explorer.exe";
     AutoFreeStr args = str::Format("/select,\"%s\"", path);
     CreateProcessHelper(process, args);
+}
+
+void CollectTabsToClose(MainWindow* win, WindowTab* currTab, Vec<WindowTab*>& toCloseOther,
+                        Vec<WindowTab*>& toCloseRight) {
+    int nTabs = win->TabCount();
+    bool seenCurrent = false;
+    for (int i = 0; i < nTabs; i++) {
+        WindowTab* tab = win->Tabs()[i];
+        if (tab->IsAboutTab()) {
+            continue;
+        }
+        if (currTab == tab) {
+            seenCurrent = true;
+            continue;
+        }
+        toCloseOther.Append(tab);
+        if (seenCurrent) {
+            toCloseRight.Append(tab);
+        }
+    }
 }
 
 // TODO: add "Move to another window" sub-menu
@@ -181,29 +267,18 @@ static void TabsContextMenu(ContextMenuEvent* ev) {
     if (tabIdx < 0) {
         return;
     }
-    int nTabs = tabsCtrl->GetTabCount();
-    WindowTab* selectedTab = win->Tabs()[tabIdx];
-    if (selectedTab->IsAboutTab()) {
+
+    int nTabs = tabsCtrl->TabCount();
+    WindowTab* tabUnderMouse = win->Tabs()[tabIdx];
+    if (tabUnderMouse->IsAboutTab()) {
         return;
     }
     POINT pt = ToPOINT(ev->mouseScreen);
     HMENU popup = BuildMenuFromMenuDef(menuDefContextTab, CreatePopupMenu(), nullptr);
+
     Vec<WindowTab*> toCloseOther;
     Vec<WindowTab*> toCloseRight;
-
-    for (int i = 0; i < nTabs; i++) {
-        if (i == tabIdx) {
-            continue;
-        }
-        WindowTab* tab = win->Tabs()[i];
-        if (tab->IsAboutTab()) {
-            continue;
-        }
-        toCloseOther.Append(tab);
-        if (i > tabIdx) {
-            toCloseRight.Append(tab);
-        }
-    }
+    CollectTabsToClose(win, tabUnderMouse, toCloseOther, toCloseRight);
 
     if (toCloseOther.IsEmpty()) {
         MenuSetEnabled(popup, CmdCloseOtherTabs, false);
@@ -218,7 +293,7 @@ static void TabsContextMenu(ContextMenuEvent* ev) {
     DestroyMenu(popup);
     switch (cmd) {
         case CmdClose:
-            CloseTab(selectedTab, false);
+            CloseTab(tabUnderMouse, false);
             break;
 
         case CmdCloseOtherTabs: {
@@ -234,16 +309,16 @@ static void TabsContextMenu(ContextMenuEvent* ev) {
             break;
         }
         case CmdShowInFolder: {
-            ShowFileInFolder(selectedTab);
+            ShowFileInFolder(tabUnderMouse);
             break;
         }
         case CmdDuplicateInNewWindow: {
-            DuplicateTabInNewWindow(selectedTab);
+            DuplicateTabInNewWindow(tabUnderMouse);
             break;
         }
         case CmdProperties: {
             bool extended = false;
-            ShowProperties(win->hwndFrame, selectedTab->ctrl, extended);
+            ShowProperties(win->hwndFrame, tabUnderMouse->ctrl, extended);
             break;
         }
     }
@@ -270,6 +345,23 @@ void CreateTabbar(MainWindow* win) {
         LoadModelIntoTab(tab);
     };
     tabsCtrl->onContextMenu = TabsContextMenu;
+
+    tabsCtrl->onTabMigration = [win](TabMigrationEvent* ev) {
+        WindowTab* tab = win->GetTab(ev->tabIdx);
+        MainWindow* releaseWnd = nullptr;
+        POINT p;
+        p.x = ev->releasePoint.x;
+        p.y = ev->releasePoint.y;
+        HWND hwnd = WindowFromPoint(p);
+        if (hwnd != nullptr) {
+            releaseWnd = FindMainWindowByHwnd(hwnd);
+        }
+        if (releaseWnd == win) {
+            // don't re-add to the same window
+            releaseWnd = nullptr;
+        }
+        MigrateTab(tab, releaseWnd);
+    };
 
     TabsCreateArgs args;
     args.parent = win->hwndFrame;
@@ -329,55 +421,32 @@ void SaveCurrentWindowTab(MainWindow* win) {
     win->tabSelectionHistory->Append(tab);
 }
 
-// TODO: most CloseX colors are not used
-void UpdateTabsColors(TabsCtrl* tab) {
-    tab->currBgCol = kTabDefaultBgCol;
-    tab->tabBackgroundBg = GetAppColor(AppColor::TabBackgroundBg);
-    tab->tabBackgroundText = GetAppColor(AppColor::TabBackgroundText);
-    tab->tabBackgroundCloseX = GetAppColor(AppColor::TabBackgroundCloseX);
-    tab->tabBackgroundCloseCircle = GetAppColor(AppColor::TabBackgroundCloseCircle);
-    tab->tabSelectedBg = GetAppColor(AppColor::TabSelectedBg);
-    tab->tabSelectedText = GetAppColor(AppColor::TabSelectedText);
-    tab->tabSelectedCloseX = GetAppColor(AppColor::TabSelectedCloseX);
-    tab->tabSelectedCloseCircle = GetAppColor(AppColor::TabSelectedCloseCircle);
-    tab->tabHighlightedBg = GetAppColor(AppColor::TabHighlightedBg);
-    tab->tabHighlightedText = GetAppColor(AppColor::TabHighlightedText);
-    tab->tabHighlightedCloseX = GetAppColor(AppColor::TabHighlightedCloseX);
-    tab->tabHighlightedCloseCircle = GetAppColor(AppColor::TabHighlightedCloseCircle);
-    tab->tabHoveredCloseX = GetAppColor(AppColor::TabHoveredCloseX);
-    tab->tabHoveredCloseCircle = GetAppColor(AppColor::TabHoveredCloseCircle);
-    tab->tabClickedCloseX = GetAppColor(AppColor::TabClickedCloseX);
-    tab->tabClickedCloseCircle = GetAppColor(AppColor::TabClickedCloseCircle);
-}
-
-// On load of a new document we insert a new tab item in the tab bar.
-WindowTab* CreateNewTab(MainWindow* win, const char* filePath) {
+WindowTab* AddTabToWindow(MainWindow* win, WindowTab* tab) {
     CrashIf(!win);
     if (!win) {
         return nullptr;
     }
 
     auto tabs = win->tabsCtrl;
-    int idx = win->TabsCount();
+    int idx = win->TabCount();
     bool useTabs = gGlobalPrefs->useTabs;
     bool noHomeTab = gGlobalPrefs->noHomeTab;
     bool createHomeTab = useTabs && !noHomeTab && (idx == 0);
     if (createHomeTab) {
-        WindowTab* tab = new WindowTab(win);
-        tab->type = WindowTab::Type::About;
-        tab->canvasRc = win->canvasRc;
+        WindowTab* homeTab = new WindowTab(win);
+        homeTab->type = WindowTab::Type::About;
+        homeTab->canvasRc = win->canvasRc;
         TabInfo* newTab = new TabInfo();
         newTab->text = str::Dup("Home");
         newTab->tooltip = nullptr;
         newTab->isPinned = true;
-        newTab->userData = (UINT_PTR)tab;
+        newTab->canClose = true;
+        newTab->userData = (UINT_PTR)homeTab;
         int insertedIdx = tabs->InsertTab(idx, newTab);
         CrashIf(insertedIdx != 0);
         idx++;
     }
 
-    WindowTab* tab = new WindowTab(win);
-    tab->SetFilePath(filePath);
     tab->canvasRc = win->canvasRc;
     TabInfo* newTab = new TabInfo();
     newTab->text = str::Dup(tab->GetTabTitle());
@@ -394,7 +463,7 @@ WindowTab* CreateNewTab(MainWindow* win, const char* filePath) {
 // Refresh the tab's title
 void TabsOnChangedDoc(MainWindow* win) {
     WindowTab* tab = win->CurrentTab();
-    CrashIf(!tab != !win->TabsCount());
+    CrashIf(!tab != !win->TabCount());
     if (!tab) {
         return;
     }
@@ -443,7 +512,7 @@ void TabsOnCtrlTab(MainWindow* win, bool reverse) {
     if (!win) {
         return;
     }
-    int count = (int)win->TabsCount();
+    int count = (int)win->TabCount();
     if (count < 2) {
         return;
     }

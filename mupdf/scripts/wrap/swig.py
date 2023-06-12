@@ -63,7 +63,6 @@ def build_swig(
         differs from our new content.
     '''
     assert isinstance( state_, state.State)
-    jlib.log( '{=build_dirs type(build_dirs)}')
     assert isinstance(build_dirs, state.BuildDirs), type(build_dirs)
     assert isinstance(generated, cpp.Generated), type(generated)
     assert language in ('python', 'csharp')
@@ -90,6 +89,15 @@ def build_swig(
             #include "mupdf/classes2.h"
             #include "mupdf/internal.h"
             #include "mupdf/exceptions.h"
+
+            #ifdef NDEBUG
+                static bool g_mupdf_trace_director = false;
+                static bool g_mupdf_trace_exceptions = false;
+            #else
+                static bool g_mupdf_trace_director = mupdf::internal_env_flag("MUPDF_trace_director");
+                static bool g_mupdf_trace_exceptions = mupdf::internal_env_flag("MUPDF_trace_exceptions");
+            #endif
+
             '''
     if language == 'csharp':
         common += textwrap.dedent(f'''
@@ -105,24 +113,49 @@ def build_swig(
 
     if language == 'python':
         common += textwrap.dedent(f'''
-                /* Support for extracting buffer data into a Python bytes. If
-                <clear> is true we clear and trim the buffer. */
+
+                static std::string to_stdstring(PyObject* s)
+                {{
+                    PyObject* repr_str = PyUnicode_AsEncodedString(s, "utf-8", "~E~");
+                    const char* repr_str_s = PyBytes_AS_STRING(repr_str);
+                    std::string ret = repr_str_s;
+                    Py_DECREF(repr_str);
+                    Py_DECREF(s);
+                    return ret;
+                }}
+
+                static std::string py_repr(PyObject* x)
+                {{
+                    if (!x) return "<C_nullptr>";
+                    PyObject* s = PyObject_Repr(x);
+                    return to_stdstring(s);
+                }}
+
+                static std::string py_str(PyObject* x)
+                {{
+                    if (!x) return "<C_nullptr>";
+                    PyObject* s = PyObject_Str(x);
+                    return to_stdstring(s);
+                }}
+
+                /* Returns a Python `bytes` containging a copy of a `fz_buffer`'s
+                data. If <clear> is true we also clear and trim the buffer. */
                 PyObject* python_buffer_to_bytes(fz_buffer* buffer, int clear)
                 {{
                     unsigned char* c = NULL;
-                    /* We mimic the affects of fz_buffer_extract(), which leaves
-                    the buffer with zero capacity. */
                     size_t len = {rename.namespace_ll_fn('fz_buffer_storage')}(buffer, &c);
                     PyObject* ret = PyBytes_FromStringAndSize((const char*) c, (Py_ssize_t) len);
                     if (clear)
                     {{
+                        /* We mimic the affects of fz_buffer_extract(), which
+                        leaves the buffer with zero capacity. */
                         {rename.namespace_ll_fn('fz_clear_buffer')}(buffer);
                         {rename.namespace_ll_fn('fz_trim_buffer')}(buffer);
                     }}
                     return ret;
                 }}
 
-                /* Returns a Python memoryview for specified memory. */
+                /* Returns a Python `memoryview` for specified memory. */
                 PyObject* python_memoryview_from_memory( void* data, size_t size, int writable)
                 {{
                     return PyMemoryView_FromMemory(
@@ -130,6 +163,14 @@ def build_swig(
                             (Py_ssize_t) size,
                             writable ? PyBUF_WRITE : PyBUF_READ
                             );
+                }}
+
+                /* Returns a Python `memoryview` for a `fz_buffer`'s data. */
+                PyObject* python_buffer_to_memoryview(fz_buffer* buffer, int writable)
+                {{
+                    unsigned char* data = NULL;
+                    size_t len = {rename.namespace_ll_fn('fz_buffer_storage')}(buffer, &data);
+                    return python_memoryview_from_memory( data, len, writable);
                 }}
 
                 /* Creates Python bytes from copy of raw data. */
@@ -318,59 +359,120 @@ def build_swig(
                 {rename.namespace_ll_fn('fz_convert_color')}(ss, sv, ds, &dv->v0, is, params);
             }}
 
-            /* SWIG-friendly support for fz_set_warning_callback() and
-            fz_set_error_callback(). */
-
-            struct SetWarningCallback
+            /* SWIG- Director class to allow fz_set_warning_callback() and
+            fz_set_error_callback() to be used with Python callbacks. Note that
+            we rename print() to _print() to match what SWIG does. */
+            struct DiagnosticCallback
             {{
-                SetWarningCallback( void* user=NULL)
+                /* `description` must be "error" or "warning". */
+                DiagnosticCallback(const char* description)
+                :
+                m_description(description)
                 {{
-                    this->user = user;
-                    {rename.namespace_ll_fn('fz_set_warning_callback')}( s_print, this);
+                    #ifndef NDEBUG
+                    if (g_mupdf_trace_director)
+                    {{
+                        std::cerr
+                                << __FILE__ << ":" << __LINE__ << ":" << __FUNCTION__ << ":"
+                                << " DiagnosticCallback[" << m_description << "]() constructor."
+                                << "\\n";
+                    }}
+                    #endif
+                    if (m_description == "warning")
+                    {{
+                        mupdf::ll_fz_set_warning_callback( s_print, this);
+                    }}
+                    else if (m_description == "error")
+                    {{
+                        mupdf::ll_fz_set_error_callback( s_print, this);
+                    }}
+                    else
+                    {{
+                        std::cerr
+                                << __FILE__ << ":" << __LINE__ << ":" << __FUNCTION__ << ":"
+                                << " DiagnosticCallback() constructor"
+                                << " Unrecognised description: " << m_description
+                                << "\\n";
+                        assert(0);
+                    }}
                 }}
-                virtual void print( const char* message)
+                virtual void _print( const char* message)
                 {{
+                    #ifndef NDEBUG
+                    if (g_mupdf_trace_director)
+                    {{
+                        std::cerr
+                                << __FILE__ << ":" << __LINE__ << ":" << __FUNCTION__ << ":"
+                                << " DiagnosticCallback[" << m_description << "]::_print()"
+                                << " called (no derived class?)" << " message: " << message
+                                << "\\n";
+                    }}
+                    #endif
+                }}
+                virtual ~DiagnosticCallback()
+                {{
+                    #ifndef NDEBUG
+                    if (g_mupdf_trace_director)
+                    {{
+                        std::cerr
+                                << __FILE__ << ":" << __LINE__ << ":" << __FUNCTION__ << ":"
+                                << " ~DiagnosticCallback[" << m_description << "]() destructor called"
+                                << " this=" << this
+                                << "\\n";
+                    }}
+                    #endif
                 }}
                 static void s_print( void* self0, const char* message)
                 {{
-                    SetWarningCallback* self = (SetWarningCallback*) self0;
-                    return self->print( message);
+                    DiagnosticCallback* self = (DiagnosticCallback*) self0;
+                    try
+                    {{
+                        return self->_print( message);
+                    }}
+                    catch (std::exception& e)
+                    {{
+                        /* It's important to swallow any exception from
+                        self->_print() because fz_set_warning_callback() and
+                        fz_set_error_callback() specifically require that
+                        the callback does not throw. But we always output a
+                        diagnostic. */
+                        std::cerr
+                                << "DiagnosticCallback[" << self->m_description << "]::s_print()"
+                                << " ignoring exception from _print(): "
+                                << e.what()
+                                << "\\n";
+                    }}
                 }}
-                void* user;
+                std::string m_description;
             }};
 
-            struct SetErrorCallback
+            struct StoryPositionsCallback
             {{
-                SetErrorCallback( void* user=NULL)
+                StoryPositionsCallback()
                 {{
-                    this->user = user;
-                    {rename.namespace_ll_fn('fz_set_error_callback')}( s_print, this);
+                    //printf( "StoryPositionsCallback() constructor\\n");
                 }}
-                virtual void print( const char* message)
+
+                virtual void call( const fz_story_element_position* position) = 0;
+
+                static void s_call( fz_context* ctx, void* self0, const fz_story_element_position* position)
                 {{
+                    //printf( "StoryPositionsCallback::s_call()\\n");
+                    (void) ctx;
+                    StoryPositionsCallback* self = (StoryPositionsCallback*) self0;
+                    self->call( position);
                 }}
-                static void s_print( void* self0, const char* message)
-                {{
-                    SetErrorCallback* self = (SetErrorCallback*) self0;
-                    return self->print( message);
-                }}
-                void* user;
+
             }};
 
-            /* Helper for calling a fz_document_open_fn() fnptr. */
-            fz_document *{rename.ll_fn('fz_document_open_fn_call')}(fz_document_open_fn fn, const char *filename)
+            void ll_fz_story_positions_director( fz_story *story, StoryPositionsCallback* cb)
             {{
-                fz_context* ctx = mupdf::internal_context_get();
-                fz_document* ret;
-                fz_try(ctx)
-                {{
-                    ret = fn( ctx, filename);
-                }}
-                fz_catch(ctx)
-                {{
-                    mupdf::internal_throw_exception( ctx);
-                }}
-                return ret;
+                //printf( "ll_fz_story_positions_director()\\n");
+                {rename.namespace_ll_fn('fz_story_positions')}(
+                        story,
+                        StoryPositionsCallback::s_call,
+                        cb
+                        );
             }}
 
             void Pixmap_set_alpha_helper(
@@ -465,27 +567,86 @@ def build_swig(
 
     text = ''
 
-    if state_.windows:
-        # 2022-02-24: Director classes break Windows builds at the moment.
-        pass
-    else:
-        text += '%module(directors="1") mupdf\n'
-        for i in generated.virtual_fnptrs:
-            text += f'%feature("director") {i};\n'
+    text += '%module(directors="1") mupdf\n'
+    for i in generated.virtual_fnptrs:
+        text += f'%feature("director") {i};\n'
 
-        text += f'%feature("director") SetWarningCallback;\n'
-        text += f'%feature("director") SetErrorCallback;\n'
+    text += f'%feature("director") DiagnosticCallback;\n'
+    text += f'%feature("director") StoryPositionsCallback;\n'
 
-        text += textwrap.dedent(
-                '''
-                %feature("director:except")
-                {
-                  if ($error != NULL)
-                  {
-                    throw Swig::DirectorMethodException();
-                  }
-                }
-                ''')
+    text += textwrap.dedent(
+    '''
+    %feature("director:except")
+    {
+        if ($error != NULL)
+        {
+            /*
+            This is how we can end up here:
+
+            1. Python code calls a function in the Python `mupdf` module.
+            2. - which calls SWIG C++ code.
+            3. - which calls MuPDF C++ API wrapper function.
+            4. - which calls MuPDF C code which calls an MuPDF struct's function pointer.
+            5. - which calls MuPDF C++ API Director wrapper (e.g. mupdf::FzDevice2) virtual function.
+            6. - which calls SWIG Director C++ code.
+            7. - which calls Python derived class's method, which raises a Python exception.
+
+            The exception propogates back up the above stack, being converted
+            into different exception mechanisms as it goes.
+
+            6. SWIG Director C++ code (here). We raise a C++ exception.
+            5. MuPDF C++ API Director wrapper converts the C++ exception into a MuPDF fz_try/catch exception.
+            4. MuPDF C code allows the exception to propogate or catches and rethrows or throws a new fz_try/catch exception.
+            3. MuPDF C++ API wrapper function converts the fz_try/catch exception into a C++ exception.
+            2. SWIG C++ code converts the C++ exception into a Python exception.
+            1. Python code receives the Python exception.
+
+            So the exception changes from a Python exception, to a C++
+            exception, to a fz_try/catch exception, to a C++ exception, and
+            finally back into a Python exception.
+
+            Each of these stages is necessary. In particular we cannot let the
+            first C++ exception propogate directly through MuPDF C code without
+            being a fz_try/catch exception, because it would mess up MuPDF C
+            code's fz_try/catch exception stack.
+            */
+
+            /* Get text description of the Python exception. todo: perhaps try
+            to represent the Python backtrace in the exception text? */
+            PyObject* etype;
+            PyObject* obj;
+            PyObject* trace;
+            PyErr_Fetch( &etype, &obj, &trace);
+            if (g_mupdf_trace_director)
+            {
+                /* __FILE__ and __LINE__ are not useful here because SWIG makes
+                them point to the generic .i code. */
+                std::cerr
+                        #ifndef _WIN32
+                        << __PRETTY_FUNCTION__ << ": "
+                        #endif
+                        << "Converting Python error into C++ exception:"
+                        << "\\n";
+                std::cerr << "    etype: " << py_str(etype) << "\\n";
+                std::cerr << "    obj:   " << py_str(obj) << "\\n";
+                std::cerr << "    trace: " << py_str(trace) << "\\n";
+            }
+            std::string message = "Director error: " + py_str(etype) + ": " + py_str(obj);
+            if (etype)  Py_DECREF(etype);
+            if (obj)    Py_DECREF(obj);
+            if (trace)  Py_DECREF(trace);
+
+            /* SWIG 4.1 documention talks about throwing a
+            Swig::DirectorMethodException here, but this doesn't work for us
+            because it sets Python's error state again, which makes the
+            next SWIG call of a C/C++ function appear to fail.
+            //throw Swig::DirectorMethodException();
+            */
+
+            throw std::runtime_error( message.c_str());
+        }
+    }
+    ''')
 
     # Ignore all C MuPDF functions; SWIG will still look at the C++ API in
     # namespace mudf.
@@ -512,6 +673,14 @@ def build_swig(
             'fz_vthrow',
             'fz_vwarn',
             'fz_write_vprintf',
+
+            'fz_utf8_from_wchar',
+            'fz_wchar_from_utf8',
+            'fz_fopen_utf8',
+            'fz_remove_utf8',
+            'fz_argv_from_wargv',
+            'fz_free_argv',
+            'fz_stdods',
             ):
         text += f'%ignore {i};\n'
         text += f'%ignore m{i};\n'
@@ -519,6 +688,7 @@ def build_swig(
     text += textwrap.dedent(f'''
             // Not implemented in mupdf.so: fz_colorspace_name_process_colorants
             %ignore fz_colorspace_name_process_colorants;
+            %ignore fz_argv_from_wargv;
 
             %ignore fz_open_file_w;
 
@@ -536,6 +706,12 @@ def build_swig(
             %ignore {rename.ll_fn('fz_write_vprintf')};
             %ignore {rename.ll_fn('fz_format_string')};
             %ignore {rename.ll_fn('fz_open_file_w')};
+
+            // Ignore custom C++ variadic fns.
+            %ignore {rename.ll_fn('pdf_dict_getlv')};
+            %ignore {rename.ll_fn('pdf_dict_getl')};
+            %ignore {rename.fn('pdf_dict_getlv')};
+            %ignore {rename.fn('pdf_dict_getl')};
 
             // SWIG can't handle this because it uses a valist.
             %ignore {rename.ll_fn('Memento_vasprintf')};
@@ -571,7 +747,6 @@ def build_swig(
             %array_class(unsigned char, uchar_array);
 
             %include <cstring.i>
-            %cstring_output_allocate(char **OUTPUT, free($1));
 
             namespace std
             {{
@@ -603,23 +778,37 @@ def build_swig(
             ''')
 
     text += textwrap.dedent(f'''
-            %exception {{
-                try {{
+            %exception
+            {{
+                try
+                {{
                     $action
                 }}
-            ''')
-    if not state_.windows:  # Directors not currently supported on Windows.
-        text += textwrap.dedent(f'''
-                catch (Swig::DirectorException &e) {{
-                    SWIG_fail;
+                catch( std::exception& e)
+                {{
+                    if (g_mupdf_trace_exceptions)
+                    {{
+                        std::cerr
+                                #ifndef _WIN32
+                                << __PRETTY_FUNCTION__ << ": "
+                                #endif
+                                << "Converting C++ std::exception into Python exception: " << e.what()
+                                << "\\n";
+                    }}
+                    SWIG_exception( SWIG_RuntimeError, e.what());
                 }}
-                ''')
-    text += textwrap.dedent(f'''
-            catch(std::exception& e) {{
-                SWIG_exception(SWIG_RuntimeError, e.what());
-            }}
-            catch(...) {{
-                    SWIG_exception(SWIG_RuntimeError, "Unknown exception");
+                catch(...)
+                {{
+                    if (g_mupdf_trace_exceptions)
+                    {{
+                        std::cerr
+                                #ifndef _WIN32
+                                << __PRETTY_FUNCTION__ << ": "
+                                #endif
+                                << "Converting unknown C++ exception into Python exception."
+                                << "\\n";
+                    }}
+                    SWIG_exception( SWIG_RuntimeError, "Unknown exception");
                 }}
             }}
             ''')
@@ -663,6 +852,15 @@ def build_swig(
 
                 %pythoncode %{{
 
+                import os
+                import re
+                import sys
+
+                def log( text):
+                    print( text, file=sys.stderr)
+
+                g_mupdf_trace_director = (os.environ.get('MUPDF_trace_director') == '1')
+
                 def fz_lookup_metadata_extra(self, key):
                     """
                     Python implementation override of {rename.class_('fz_document')}.lookup_metadata().
@@ -704,7 +902,6 @@ def build_swig(
         #
         text += generated.swig_python
         text += textwrap.dedent(f'''
-                import re
 
                 # Wrap fz_parse_page_range() to fix SWIG bug where a NULL return
                 # value seems to mess up the returned list - we end up with ret
@@ -794,6 +991,15 @@ def build_swig(
                 {rename.class_('fz_buffer')}.{rename.method('fz_buffer', 'fz_buffer_extract_copy')}  = {rename.class_('fz_buffer')}_fz_buffer_extract_copy
                 {rename.fn('fz_buffer_extract_copy')} = {rename.class_('fz_buffer')}_fz_buffer_extract_copy
 
+                def fz_buffer_storage_memoryview( buffer, writable=False):
+                    """
+                    Returns a read-only or writable Python `memoryview` onto
+                    `fz_buffer` data. This relies on `buffer` existing and
+                    not changing size while the `memoryview` is used.
+                    """
+                    return python_buffer_to_memoryview( buffer.m_internal, writable)
+                {rename.class_('fz_buffer')}.{rename.method('fz_buffer', 'fz_buffer_storage_memoryview')}  = fz_buffer_storage_memoryview
+
                 # Overwrite wrappers for fz_new_buffer_from_copied_data() to
                 # take Python `bytes` instance.
                 #
@@ -848,22 +1054,22 @@ def build_swig(
                 def {rename.ll_fn('pdf_set_annot_color')}(annot, color):
                     """
                     Python implementation of pdf_set_annot_color() using
-                    {rename.ll_fn('pdf_set_annot_interior_color2')}().
+                    {rename.ll_fn('pdf_set_annot_color2')}().
                     """
                     if isinstance(color, float):
-                        {rename.ll_fn('pdf_set_annot_interior_color2')}(annot, 1, color, 0, 0, 0)
+                        {rename.ll_fn('pdf_set_annot_color2')}(annot, 1, color, 0, 0, 0)
                     elif len(color) == 1:
-                        {rename.ll_fn('pdf_set_annot_interior_color2')}(annot, 1, color[0], 0, 0, 0)
+                        {rename.ll_fn('pdf_set_annot_color2')}(annot, 1, color[0], 0, 0, 0)
                     elif len(color) == 2:
-                        {rename.ll_fn('pdf_set_annot_interior_color2')}(annot, 2, color[0], color[1], 0, 0)
+                        {rename.ll_fn('pdf_set_annot_color2')}(annot, 2, color[0], color[1], 0, 0)
                     elif len(color) == 3:
-                        {rename.ll_fn('pdf_set_annot_interior_color2')}(annot, 3, color[0], color[1], color[2], 0)
+                        {rename.ll_fn('pdf_set_annot_color2')}(annot, 3, color[0], color[1], color[2], 0)
                     elif len(color) == 4:
-                        {rename.ll_fn('pdf_set_annot_interior_color2')}(annot, 4, color[0], color[1], color[2], color[3])
+                        {rename.ll_fn('pdf_set_annot_color2')}(annot, 4, color[0], color[1], color[2], color[3])
                     else:
                         raise Exception( f'Unexpected color should be float or list of 1-4 floats: {{color}}')
 
-                # Override {rename.fn('pdf_set_annot_color')}()s to use the above.
+                # Override {rename.fn('pdf_set_annot_color')}() to use the above.
                 def {rename.fn('pdf_set_annot_color')}(self, color):
                     return {rename.ll_fn('pdf_set_annot_color')}(self.m_internal, color)
                 {rename.class_('pdf_annot')}.{rename.method('pdf_annot', 'pdf_set_annot_color')} = {rename.fn('pdf_set_annot_color')}
@@ -913,7 +1119,7 @@ def build_swig(
 
                     Returns (dv0, dv1, dv2, dv3).
                     """
-                    dv = {rename.fn('fz_convert_color')}2_v()
+                    dv = {rename.fn('fz_convert_color2_v')}()
                     if isinstance( sv, float):
                        {rename.ll_fn('fz_convert_color2')}( ss, sv, 0.0, 0.0, 0.0, ds, dv, is_, params)
                     elif isinstance( sv, (tuple, list)):
@@ -933,34 +1139,77 @@ def build_swig(
                     return {rename.ll_fn('fz_convert_color')}( ss.m_internal, sv, ds.m_internal, is_.m_internal, params.internal())
                 {rename.class_('fz_colorspace')}.{rename.method('fz_colorspace', 'fz_convert_color')} = {rename.fn('fz_convert_color')}
 
-                # Override set_warning_callback() and set_error_callback() to
-                # use Python classes derived from our SWIG Director classes
-                # SetWarningCallback and SetErrorCallback (defined in C), so
+                # Override fz_set_warning_callback() and
+                # fz_set_error_callback() to use Python classes derived from
+                # our SWIG Director class DiagnosticCallback (defined in C), so
                 # that fnptrs can call Python code.
+                #
+
+                # We store DiagnosticCallbackPython instances in these
+                # globals to ensure they continue to exist after
+                # set_diagnostic_callback() returns.
                 #
                 set_warning_callback_s = None
                 set_error_callback_s = None
 
-                def set_warning_callback2( printfn):
-                    class Callback( SetWarningCallback):
-                        def print( self, message):
-                            printfn( message)
-                    global set_warning_callback_s
-                    set_warning_callback_s = Callback()
-
                 # Override set_error_callback().
-                def set_error_callback2( printfn):
-                    class Callback( SetErrorCallback):
-                        def print( self, message):
-                            printfn( message)
-                    global set_error_callback_s
-                    set_error_callback_s = Callback()
+                class DiagnosticCallbackPython( DiagnosticCallback):
+                    """
+                    Overrides Director class DiagnosticCallback's virtual
+                    `_print()` method in Python.
+                    """
+                    def __init__( self, description, printfn):
+                        super().__init__( description)
+                        self.printfn = printfn
+                        if g_mupdf_trace_director:
+                            log( f'DiagnosticCallbackPython[{{self.m_description}}].__init__() self={{self!r}} printfn={{printfn!r}}')
+                    def __del__( self):
+                        if g_mupdf_trace_director:
+                            log( f'DiagnosticCallbackPython[{{self.m_description}}].__del__() destructor called.')
+                    def _print( self, message):
+                        if g_mupdf_trace_director:
+                            log( f'DiagnosticCallbackPython[{{self.m_description}}]._print(): Calling self.printfn={{self.printfn!r}} with message={{message!r}}')
+                        try:
+                            self.printfn( message)
+                        except Exception as e:
+                            # This shouldn't happen, so always output a diagnostic.
+                            log( f'DiagnosticCallbackPython[{{self.m_description}}]._print(): Warning: exception from self.printfn={{self.printfn!r}}: e={{e!r}}')
+                            # Calling `raise` here serves to test
+                            # `DiagnosticCallback()`'s swallowing of what will
+                            # be a C++ exception. But we could swallow the
+                            # exception here instead.
+                            raise
 
-                {rename.fn('fz_set_warning_callback')} = set_warning_callback2
-                {rename.fn('fz_set_error_callback')} = set_error_callback2
+                def set_diagnostic_callback( description, printfn):
+                    if g_mupdf_trace_director:
+                        log( f'set_diagnostic_callback() description={{description!r}} printfn={{printfn!r}}')
+                    if printfn:
+                        ret = DiagnosticCallbackPython( description, printfn)
+                        return ret
+                    else:
+                        if g_mupdf_trace_director:
+                            log( f'Calling ll_fz_set_{{description}}_callback() with (None, None)')
+                        if description == 'error':
+                            ll_fz_set_error_callback( None, None)
+                        elif description == 'warning':
+                            ll_fz_set_warning_callback( None, None)
+                        else:
+                            assert 0, f'Unrecognised description={{description!r}}'
+                        return None
+
+                def fz_set_error_callback( printfn):
+                    global set_error_callback_s
+                    set_error_callback_s = set_diagnostic_callback( 'error', printfn)
+
+                def fz_set_warning_callback( printfn):
+                    global set_warning_callback_s
+                    set_warning_callback_s = set_diagnostic_callback( 'warning', printfn)
 
                 # Direct access to fz_pixmap samples.
-                def {rename.fn('fz_pixmap_samples')}2( pixmap):
+                def {rename.fn('fz_pixmap_samples2')}( pixmap):
+                    """
+                    Returns a writable Python `memoryview` for a `fz_pixmap`.
+                    """
                     assert isinstance( pixmap, {rename.class_('fz_pixmap')})
                     ret = python_memoryview_from_memory(
                             {rename.fn('fz_pixmap_samples')}( pixmap),
@@ -968,7 +1217,7 @@ def build_swig(
                             1, # writable
                             )
                     return ret
-                {rename.class_('fz_pixmap')}.{rename.method('fz_pixmap', 'pixmap_samples')}2 = {rename.fn('fz_pixmap_samples')}2
+                {rename.class_('fz_pixmap')}.{rename.method('fz_pixmap', 'fz_pixmap_samples2')} = {rename.fn('fz_pixmap_samples2')}
 
                 # Avoid potential unsafe use of variadic args by forcing a
                 # single arg and escaping all '%' characters. (Passing ('%s',
@@ -976,10 +1225,76 @@ def build_swig(
                 #
                 {rename.ll_fn('fz_warn')}_original = {rename.ll_fn('fz_warn')}
                 def {rename.ll_fn('fz_warn')}( text):
-                    assert isinstance( text, str)
+                    assert isinstance( text, str), f'text={{text!r}} str={{str!r}}'
                     text = text.replace( '%', '%%')
                     return {rename.ll_fn('fz_warn')}_original( text)
                 #warn = mfz_warn
+
+                # Force use of pdf_field_name2() instead of pdf_field_name()
+                # because the latter returns a buffer that must be freed by the
+                # caller.
+                {rename.ll_fn('pdf_field_name')} = {rename.ll_fn('pdf_field_name2')}
+                {rename.fn('pdf_field_name')} = {rename.fn('pdf_field_name2')}
+                {rename.class_('pdf_obj')}.{rename.method('pdf_obj', 'pdf_field_name')} = {rename.class_('pdf_obj')}.{rename.method('pdf_obj', 'pdf_field_name2')}
+
+                # It's important that when we create class derived
+                # from StoryPositionsCallback, we ensure that
+                # StoryPositionsCallback's constructor is called. Otherwise
+                # the new instance doesn't seem to be an instance of
+                # StoryPositionsCallback.
+                #
+                class StoryPositionsCallback_python( StoryPositionsCallback):
+                    def __init__( self, python_callback):
+                        super().__init__()
+                        self.python_callback = python_callback
+                    def call( self, position):
+                        self.python_callback( position)
+
+                ll_fz_story_positions_orig = {rename.ll_fn('fz_story_positions')}
+                def ll_fz_story_positions( story, python_callback):
+                    """
+                    Custom replacement for `ll_fz_story_positions()` that takes
+                    a Python callable `python_callback`.
+                    """
+                    #log( f'll_fz_story_positions() type(story)={{type(story)!r}} type(python_callback)={{type(python_callback)!r}}')
+                    python_callback_instance = StoryPositionsCallback_python( python_callback)
+                    #python_callback_instance = StoryPositionsCallback_python()
+                    #python_callback_instance.python_callback = python_callback
+                    ll_fz_story_positions_director( story, python_callback_instance)
+
+                def fz_story_positions( story, python_callback):
+                    #log( f'fz_story_positions() type(story)={{type(story)!r}} type(python_callback)={{type(python_callback)!r}}')
+                    assert isinstance( story, {rename.class_('fz_story')})
+                    assert callable( python_callback)
+                    def python_callback2( position):
+                        position2 = FzStoryElementPosition( position)
+                        python_callback( position2)
+                    ll_fz_story_positions( story.m_internal, python_callback2)
+
+                {rename.class_('fz_story')}.{rename.method('fz_story', 'fz_story_positions')} = fz_story_positions
+
+                # Monkey-patch `FzDocumentWriter.__init__()` to set `self._out`
+                # to any `FzOutput2` arg. This ensures that the Python part of
+                # the derived `FzOutput2` instance is kept alive for use by the
+                # `FzDocumentWriter`, otherwise Python can delete it, then get
+                # a SEGV if C++ tries to call the derived Python methods.
+                #
+                # [We don't patch equivalent class-aware functions such
+                # as `fz_new_pdf_writer_with_output()` because they are
+                # not available to C++/Python, because FzDocumentWriter is
+                # non-copyable.]
+                #
+                FzDocumentWriter__init__0 = FzDocumentWriter.__init__
+                def FzDocumentWriter__init__1(self, *args):
+                    out = None
+                    for arg in args:
+                        if isinstance( arg, FzOutput2):
+                            assert not out, "More than one FzOutput2 passed to FzDocumentWriter.__init__()"
+                            out = arg
+                    if out:
+                        self._out = out
+                    return FzDocumentWriter__init__0(self, *args)
+                FzDocumentWriter.__init__ = FzDocumentWriter__init__1
                 ''')
 
         # Add __iter__() methods for all classes with begin() and end() methods.
@@ -998,6 +1313,7 @@ def build_swig(
         #
         for struct_name in generated.to_string_structnames:
             text += f'{struct_name}.__str__ = lambda s: to_string_{struct_name}(s)\n'
+            text += f'{struct_name}.__repr__ = lambda s: to_string_{struct_name}(s)\n'
 
         # For all wrapper classes with a to_string() method, add a __str__() method
         # to the Python wrapper class, which calls the class's to_string() method.
@@ -1006,6 +1322,7 @@ def build_swig(
         #
         for struct_name in generated.to_string_structnames:
             text += f'{rename.class_(struct_name)}.__str__ = lambda self: self.to_string()\n'
+            text += f'{rename.class_(struct_name)}.__repr__ = lambda self: self.to_string()\n'
 
         text += '%}\n'
 
@@ -1077,34 +1394,39 @@ def build_swig(
     else:
         jlib.update_file( '', swig2_i)
 
-    # Try to disable some unhelpful SWIG warnings;. unfortunately this doesn't
-    # seem to have any effect.
+    # Disable some unhelpful SWIG warnings. Must not use -Wall as it overrides
+    # all warning disables.
     disable_swig_warnings = [
             201,    # Warning 201: Unable to find 'stddef.h'
             314,    # Warning 314: 'print' is a python keyword, renaming to '_print'
+            302,    # Warning 302: Identifier 'pdf_annot_type' redefined (ignored),
             312,    # Warning 312: Nested union not currently supported (ignored).
             321,    # Warning 321: 'max' conflicts with a built-in name in python
+            322,    # Warning 322: Redundant redeclaration of 'pdf_annot',
             362,    # Warning 362: operator= ignored
             451,    # Warning 451: Setting a const char * variable may leak memory.
             503,    # Warning 503: Can't wrap 'operator <<' unless renamed to a valid identifier.
             512,    # Warning 512: Overloaded method mupdf::DrawOptions::internal() const ignored, using non-const method mupdf::DrawOptions::internal() instead.
+            509,    # Warning 509: Overloaded method mupdf::FzAaContext::FzAaContext(::fz_aa_context const) effectively ignored,
+            560,    # Warning 560: Unknown Doxygen command: d.
             ]
-    disable_swig_warnings = map( str, disable_swig_warnings)
+
+    disable_swig_warnings = [ '-' + str( x) for x in disable_swig_warnings]
     disable_swig_warnings = '-w' + ','.join( disable_swig_warnings)
 
     # Preserve any existing file `swig_cpp`, so that we can restore the
     # mtime if SWIG produces an unchanged file. This then avoids unnecessary
     # recompilation.
+    #
+    # 2022-11-16: Disabled this, because it can result in continuous
+    # unnecessary rebuilds, e.g. if .cpp is older than a mupdf header.
+    #
     swig_cpp_old = None
-    if os.path.exists( swig_cpp):
+    if 0 and os.path.exists( swig_cpp):
         swig_cpp_old = f'{swig_cpp}-old'
         jlib.copy( swig_cpp, swig_cpp_old)
 
     if language == 'python':
-        # Need -D_WIN32 on Windows because as of 2022-03-17, C++ code for
-        # SWIG Directors support doesn't work on Windows so is inside #ifndef
-        # _WIN32...#endif.
-        #
         # Maybe use '^' on windows as equivalent to unix '\\' for multiline
         # ending?
         def make_command( module, cpp, swig_i):
@@ -1115,10 +1437,10 @@ def build_swig(
                     f'''
                     "{swig_command}"
                         {"-D_WIN32" if state_.windows else ""}
-                        -Wall
                         -c++
                         {"-doxygen" if swig_major >= 4 else ""}
                         -python
+                        -Wextra
                         {disable_swig_warnings}
                         -module {module}
                         -outdir {os.path.relpath(build_dirs.dir_so)}
@@ -1129,7 +1451,7 @@ def build_swig(
                         -I{os.path.relpath(include2)}
                         -ignoremissing
                         {swig_i}
-                    ''').strip().replace( '\n', "" if state_.windows else "\\\n")
+                    ''').strip().replace( '\n', "" if state_.windows else " \\\n")
                     )
             return command
 
@@ -1145,33 +1467,7 @@ def build_swig(
             with open( swig_py_tmp) as f:
                 swig_py_content = f.read()
 
-            if state_.openbsd:
-                # Write Python code that will automatically load the required
-                # .so's when mupdf.py is imported. Unfortunately this doesn't
-                # work on Linux.
-                prefix = textwrap.dedent(
-                        f'''
-                        import ctypes
-                        import os
-                        import importlib
-
-                        # The required .so's are in the same directory as this
-                        # Python file. On OpenBSD we can explicitly load these
-                        # .so's here using ctypes.cdll.LoadLibrary(), which
-                        # avoids the need for LD_LIBRARY_PATH to be defined.
-                        #
-                        # Unfortunately this doesn't work on Linux.
-                        #
-                        for leaf in ('libmupdf.so', 'libmupdfcpp.so', '{so}'):
-                            path = os.path.abspath(f'{{__file__}}/../{{leaf}}')
-                            #print(f'path={{path}}')
-                            #print(f'exists={{os.path.exists(path)}}')
-                            ctypes.cdll.LoadLibrary( path)
-                            #print(f'have loaded {{path}}')
-                        ''')
-                swig_py_content = prefix + swig_py_content
-
-            elif state_.windows:
+            if state_.windows:
                 jlib.log('Adding prefix to {swig_cpp=}')
                 prefix = ''
                 postfix = ''
@@ -1182,7 +1478,7 @@ def build_swig(
                 # Change all our PDF_ENUM_NAME_* enums so that they are actually
                 # PdfObj instances so that they can be used like any other PdfObj.
                 #
-                jlib.log('{len(generated.c_enums)=}')
+                #jlib.log('{len(generated.c_enums)=}')
                 for enum_type, enum_names in generated.c_enums.items():
                     for enum_name in enum_names:
                         if enum_name.startswith( 'PDF_ENUM_NAME_'):
@@ -1239,9 +1535,9 @@ def build_swig(
                 f'''
                 "{swig_command}"
                     {"-D_WIN32" if state_.windows else ""}
-                    -Wall
                     -c++
                     -csharp
+                    -Wextra
                     {disable_swig_warnings}
                     -module mupdf
                     -namespace mupdf

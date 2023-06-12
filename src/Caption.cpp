@@ -11,6 +11,7 @@
 
 #include "Settings.h"
 #include "AppColors.h"
+#include "GlobalPrefs.h"
 #include "ProgressUpdateUI.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
@@ -20,6 +21,7 @@
 #include "resource.h"
 #include "Commands.h"
 #include "Menu.h"
+#include "Theme.h"
 
 using Gdiplus::ARGB;
 using Gdiplus::Brush;
@@ -161,6 +163,10 @@ void CaptionInfo::UpdateColors(bool activeWindow) {
             (activeWindow || dwm::IsCompositionEnabled()) ? TMT_CAPTIONTEXT : TMT_INACTIVECAPTIONTEXT, &textColor))) {
         textColor = (activeWindow || dwm::IsCompositionEnabled()) ? GetSysColor(COLOR_CAPTIONTEXT)
                                                                   : GetSysColor(COLOR_INACTIVECAPTIONTEXT);
+    }
+    if (gGlobalPrefs->useTabs) {
+        COLORREF col = currentTheme->mainWindow.controlBackgroundColor;
+        dwm::SetCaptionColor(::GetParent(hwnd), col);
     }
 }
 

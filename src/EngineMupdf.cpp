@@ -188,7 +188,11 @@ static IPageDestination* NewPageDestinationMupdf(fz_context* ctx, fz_document* d
     if (str::StartsWithI(uri, "file://")) {
         char* path = str::DupTemp(uri);
         path = CleanupFileURL(path);
-        auto res = new PageDestinationFile(path);
+        char* frag = str::FindChar(uri, '#');
+        if (frag) {
+            frag++;
+        }
+        auto res = new PageDestinationFile(path, frag);
         res->rect = FzGetRectF(link, outline);
         str::Free(path);
         return res;
@@ -1307,7 +1311,39 @@ void BuildPageLabelRec(fz_context* ctx, pdf_obj* node, int pageCount, Vec<PageLa
     }
 }
 
-StrVec* BuildPageLabelVec(fz_context* ctx, pdf_obj* root, int pageCount) {
+// TODO: maybe remove the code completely
+// bugs: 3225 and 353
+// not sure if we should do it, it's unexpected behavior
+static bool gEnsureUniqueLabels = false;
+
+static void EnsureLabelsUnique(StrVec* labels) {
+    if (!gEnsureUniqueLabels) {
+        return;
+    }
+    // ensure that all page labels are unique (by appending a number to duplicates)
+    StrVec dups(*labels);
+    dups.Sort();
+    int nDups = dups.Size();
+    for (int i = 1; i < nDups; i++) {
+        if (!str::Eq(dups.at(i), dups.at(i - 1))) {
+            continue;
+        }
+        int idx = labels->Find(dups.at(i)), counter = 0;
+        while ((idx = labels->Find(dups.at(i), idx + 1)) != -1) {
+            AutoFreeStr unique;
+            do {
+                unique.Set(str::Format("%s.%d", dups.at(i), ++counter));
+            } while (labels->Contains(unique));
+            labels->SetAt(idx, unique.Get());
+        }
+        nDups = dups.Size();
+        for (; i + 1 < nDups && str::Eq(dups.at(i), dups.at(i + 1)); i++) {
+            // no-op
+        }
+    }
+}
+
+static StrVec* BuildPageLabelVec(fz_context* ctx, pdf_obj* root, int pageCount) {
     Vec<PageLabelInfo> data;
     BuildPageLabelRec(ctx, root, pageCount, data);
     data.Sort(CmpPageLabelInfo);
@@ -1350,28 +1386,7 @@ StrVec* BuildPageLabelVec(fz_context* ctx, pdf_obj* root, int pageCount) {
         labels->SetAt(idx, "");
     }
 
-    // ensure that all page labels are unique (by appending a number to duplicates)
-    StrVec dups(*labels);
-    dups.Sort();
-    int nDups = dups.Size();
-    for (int i = 1; i < nDups; i++) {
-        if (!str::Eq(dups.at(i), dups.at(i - 1))) {
-            continue;
-        }
-        int idx = labels->Find(dups.at(i)), counter = 0;
-        while ((idx = labels->Find(dups.at(i), idx + 1)) != -1) {
-            AutoFreeStr unique;
-            do {
-                unique.Set(str::Format("%s.%d", dups.at(i), ++counter));
-            } while (labels->Contains(unique));
-            labels->SetAt(idx, unique.Get());
-        }
-        nDups = dups.Size();
-        for (; i + 1 < nDups && str::Eq(dups.at(i), dups.at(i + 1)); i++) {
-            // no-op
-        }
-    }
-
+    EnsureLabelsUnique(labels);
     return labels;
 }
 struct PageTreeStackItem {
@@ -2033,91 +2048,31 @@ bool EngineMupdf::FinishLoading() {
 
     ScopedCritSec scope(ctxAccess);
 
-    bool loadPageTreeFailed = false;
-
-    fz_try(ctx) {
-        pdf_load_page_tree(ctx, pdfdoc);
-    }
-    fz_catch(ctx) {
-        fz_warn(ctx, "pdf_load_page_tree() failed");
-        loadPageTreeFailed = true;
-    }
-
-    int nPages = pdfdoc->map_page_count;
-    if (nPages != pageCount) {
-        fz_warn(ctx, "mismatch between fz_count_pages() and doc->rev_page_count");
-        return false;
-    }
-
-    if (!loadPageTreeFailed) {
-        // this does the job of pdf_bound_page but without doing pdf_load_page()
-        pdf_rev_page_map* map = pdfdoc->rev_page_map;
-        for (int i = 0; i < nPages && !loadPageTreeFailed; i++) {
-            int pageNo = map[i].page;
-            if (pageNo >= nPages) {
-                // corrupted file
-                loadPageTreeFailed = true;
-                continue;
-            }
-            int objNo = map[i].object;
-            fz_rect mbox{};
-            fz_matrix page_ctm{};
-            pdf_obj* pageref = nullptr;
-            fz_var(pageref);
-            fz_var(mbox);
-            fz_try(ctx) {
-                pageref = pdf_load_object(ctx, pdfdoc, objNo);
-                pdf_page_obj_transform(ctx, pageref, &mbox, &page_ctm);
-                mbox = fz_transform_rect(mbox, page_ctm);
-                pdf_drop_obj(ctx, pageref);
-            }
-            fz_catch(ctx) {
-                loadPageTreeFailed = true;
-                mbox = {};
-            }
-            if (fz_is_empty_rect(mbox)) {
-                logfa("cannot find page size for page %d", i);
-                mbox.x0 = 0;
-                mbox.y0 = 0;
-                mbox.x1 = 612;
-                mbox.y1 = 792;
-                loadPageTreeFailed = true;
-            }
-            FzPageInfo* pageInfo = pages[pageNo];
-            pageInfo->mediabox = ToRectF(mbox);
-            pageInfo->pageNo = pageNo + 1;
+    for (int pageNo = 0; pageNo < pageCount; pageNo++) {
+        pdf_obj* pageref = nullptr;
+        fz_rect mbox{};
+        fz_matrix page_ctm{};
+        fz_var(pageref);
+        fz_var(mbox);
+        fz_try(ctx) {
+            // note: don't pdf_drop_obj() this
+            pageref = pdf_lookup_page_obj(ctx, pdfdoc, pageNo);
+            pdf_page_obj_transform(ctx, pageref, &mbox, &page_ctm);
+            mbox = fz_transform_rect(mbox, page_ctm);
         }
-    }
-
-    if (loadPageTreeFailed) {
-        for (int pageNo = 0; pageNo < nPages; pageNo++) {
-            FzPageInfo* pageInfo = pages[pageNo];
-            pageInfo->pageNo = pageNo + 1;
-            fz_rect mbox{};
-            pdf_page* page = nullptr;
-            fz_var(page);
-            fz_var(mbox);
-            fz_try(ctx) {
-                page = pdf_load_page(ctx, pdfdoc, pageNo);
-                pageInfo->page = (fz_page*)page;
-                mbox = pdf_bound_page(ctx, page);
-            }
-            fz_catch(ctx) {
-                mbox = {};
-            }
-
-            if (fz_is_empty_rect(mbox)) {
-                logfa("cannot find page size (2) for page %d", pageNo);
-                mbox.x0 = 0;
-                mbox.y0 = 0;
-                mbox.x1 = 612;
-                mbox.y1 = 792;
-            }
-            pageInfo->mediabox = ToRectF(mbox);
+        fz_catch(ctx) {
+            mbox = {};
         }
-    }
-    if (loadPageTreeFailed) {
-        logfa("Failed to load page tree for '%s'\n", FilePath());
+        if (fz_is_empty_rect(mbox)) {
+            logfa("cannot find page size for page %d", pageNo);
+            mbox.x0 = 0;
+            mbox.y0 = 0;
+            mbox.x1 = 612;
+            mbox.y1 = 792;
+        }
+        FzPageInfo* pageInfo = pages[pageNo];
+        pageInfo->mediabox = ToRectF(mbox);
+        pageInfo->pageNo = pageNo + 1;
     }
 
     fz_try(ctx) {
@@ -2384,8 +2339,9 @@ static IPageElement* NewFzComment(const char* comment, int pageNo, RectF rect) {
     return res;
 }
 
+// must be called inside fz_try
 static IPageElement* MakePdfCommentFromPdfAnnot(fz_context* ctx, int pageNo, pdf_annot* annot) {
-    fz_rect rect = pdf_annot_rect(ctx, annot);
+    fz_rect rect = pdf_bound_annot(ctx, annot);
     auto tp = pdf_annot_type(ctx, annot);
     const char* contents = pdf_annot_contents(ctx, annot);
     const char* label = pdf_annot_field_label(ctx, annot);
@@ -2396,6 +2352,70 @@ static IPageElement* MakePdfCommentFromPdfAnnot(fz_context* ctx, int pageNo, pdf
     }
     RectF rd = ToRectF(rect);
     return NewFzComment(s, pageNo, rd);
+}
+
+// must be called inside fz_try
+static void MakePageElementCommentsFromAnnotationsInner(fz_context* ctx, pdf_annot* annot, int pageNo,
+                                                        Vec<IPageElement*>& comments) {
+    auto tp = pdf_annot_type(ctx, annot);
+    const char* contents = pdf_annot_contents(ctx, annot); // don't free
+    if (str::Len(contents) > 128) {
+        contents = str::DupTemp(contents, 128);
+    }
+    bool isContentsEmpty = str::IsEmpty(contents);
+    const char* label = pdf_annot_field_label(ctx, annot); // don't free
+    bool isLabelEmpty = str::IsEmpty(label);
+    int flags = pdf_annot_field_flags(ctx, annot);
+    bool isEmpty = isContentsEmpty && isLabelEmpty;
+
+    const char* tpStr = pdf_string_from_annot_type(ctx, tp);
+    logf("MakePageElementCommentsFromAnnotations: annot %d '%s', contents: '%s', label: '%s'\n", tp, tpStr, contents,
+         label);
+
+    if (PDF_ANNOT_FILE_ATTACHMENT == tp) {
+        logf("found file attachment annotation\n");
+
+        pdf_embedded_file_params fileParams = {};
+        pdf_obj* fs = pdf_annot_filespec(ctx, annot);
+        int num = pdf_to_num(ctx, pdf_annot_obj(ctx, annot));
+        pdf_get_embedded_file_params(ctx, fs, &fileParams);
+        const char* attname = fileParams.filename;
+        fz_rect rect = pdf_bound_annot(ctx, annot);
+        if (str::IsEmpty(attname) || fz_is_empty_rect(rect) || !pdf_is_embedded_file(ctx, fs)) {
+            return;
+        }
+
+        logf("attachment: %s, num: %d\n", attname, num);
+
+        auto dest = new PageDestination();
+        // TODO: kindDestinationAttachment ?
+        dest->kind = kindDestinationLaunchEmbedded;
+        dest->value = str::Dup(attname);
+
+        auto el = new PageElementDestination(dest);
+        el->pageNo = pageNo;
+        el->rect = ToRectF(rect);
+
+        comments.Append(el);
+        // TODO: need to implement https://github.com/sumatrapdfreader/sumatrapdf/issues/1336
+        // for saving the attachment to a file
+        // TODO: expose /Contents in addition to the file path
+        return;
+    }
+
+    if (!isEmpty && tp != PDF_ANNOT_FREE_TEXT) {
+        auto comment = MakePdfCommentFromPdfAnnot(ctx, pageNo, annot);
+        comments.Append(comment);
+        return;
+    }
+
+    if (PDF_ANNOT_WIDGET == tp && !isLabelEmpty) {
+        bool isReadOnly = flags & PDF_FIELD_IS_READ_ONLY;
+        if (!isReadOnly) {
+            auto comment = MakePdfCommentFromPdfAnnot(ctx, pageNo, annot);
+            comments.Append(comment);
+        }
+    }
 }
 
 static void MakePageElementCommentsFromAnnotations(fz_context* ctx, FzPageInfo* pageInfo) {
@@ -2410,61 +2430,10 @@ static void MakePageElementCommentsFromAnnotations(fz_context* ctx, FzPageInfo* 
 
     pdf_annot* annot;
     for (annot = pdf_first_annot(ctx, pdfpage); annot; annot = pdf_next_annot(ctx, annot)) {
-        auto tp = pdf_annot_type(ctx, annot);
-        const char* contents = pdf_annot_contents(ctx, annot); // don't free
-        bool isContentsEmpty = str::IsEmpty(contents);
-        const char* label = pdf_annot_field_label(ctx, annot); // don't free
-        bool isLabelEmpty = str::IsEmpty(label);
-        int flags = pdf_annot_field_flags(ctx, annot);
-        bool isEmpty = isContentsEmpty && isLabelEmpty;
-
-        const char* tpStr = pdf_string_from_annot_type(ctx, tp);
-        logf("MakePageElementCommentsFromAnnotations: annot %d '%s', contents: '%s', label: '%s'\n", tp, tpStr,
-             contents, label);
-
-        if (PDF_ANNOT_FILE_ATTACHMENT == tp) {
-            logf("found file attachment annotation\n");
-
-            pdf_embedded_file_params fileParams = {};
-            pdf_obj* fs = pdf_annot_filespec(ctx, annot);
-            int num = pdf_to_num(ctx, pdf_annot_obj(ctx, annot));
-            pdf_get_embedded_file_params(ctx, fs, &fileParams);
-            const char* attname = fileParams.filename;
-            fz_rect rect = pdf_annot_rect(ctx, annot);
-            if (str::IsEmpty(attname) || fz_is_empty_rect(rect) || !pdf_is_embedded_file(ctx, fs)) {
-                continue;
-            }
-
-            logf("attachment: %s, num: %d\n", attname, num);
-
-            auto dest = new PageDestination();
-            // TODO: kindDestinationAttachment ?
-            dest->kind = kindDestinationLaunchEmbedded;
-            dest->value = str::Dup(attname);
-
-            auto el = new PageElementDestination(dest);
-            el->pageNo = pageNo;
-            el->rect = ToRectF(rect);
-
-            comments.Append(el);
-            // TODO: need to implement https://github.com/sumatrapdfreader/sumatrapdf/issues/1336
-            // for saving the attachment to a file
-            // TODO: expose /Contents in addition to the file path
-            continue;
+        fz_try(ctx) {
+            MakePageElementCommentsFromAnnotationsInner(ctx, annot, pageNo, comments);
         }
-
-        if (!isEmpty && tp != PDF_ANNOT_FREE_TEXT) {
-            auto comment = MakePdfCommentFromPdfAnnot(ctx, pageNo, annot);
-            comments.Append(comment);
-            continue;
-        }
-
-        if (PDF_ANNOT_WIDGET == tp && !isLabelEmpty) {
-            bool isReadOnly = flags & PDF_FIELD_IS_READ_ONLY;
-            if (!isReadOnly) {
-                auto comment = MakePdfCommentFromPdfAnnot(ctx, pageNo, annot);
-                comments.Append(comment);
-            }
+        fz_catch(ctx) {
         }
     }
 
@@ -3464,9 +3433,11 @@ bool EngineMupdfHasUnsavedAnnotations(EngineBase* engine) {
         return false;
     }
     // pdf_has_unsaved_changes() also returns true if the file was auto-repaired
-    // at loading time, which is not something we want
-    // int res = pdf_has_unsaved_changes(epdf->ctx, epdf->pdfdoc);
-    // return res != 0;
+    // at loading time, which is not something we want, so only rely on it
+    // when we know it wasn't repaired.
+    if (!pdf_was_repaired(epdf->ctx, epdf->pdfdoc)) {
+        return pdf_has_unsaved_changes(epdf->ctx, epdf->pdfdoc);
+    }
     return epdf->modifiedAnnotations;
 }
 
@@ -3526,7 +3497,7 @@ Annotation* EngineMupdfGetAnnotationAtPos(EngineBase* engine, int pageNo, PointF
         enum pdf_annot_type tp = pdf_annot_type(epdf->ctx, annot);
         AnnotationType atp = AnnotationTypeFromPdfAnnot(tp);
         if (IsAllowedAnnot(atp, allowedAnnots)) {
-            fz_rect rc = pdf_annot_rect(epdf->ctx, annot);
+            fz_rect rc = pdf_bound_annot(epdf->ctx, annot);
             if (fz_is_point_inside_rect(p, rc)) {
                 matched = annot;
             }

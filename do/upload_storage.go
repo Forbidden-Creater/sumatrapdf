@@ -12,24 +12,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kjk/minio"
+	"github.com/kjk/minioutil"
+	"github.com/kjk/u"
 )
 
 // we delete old daily and pre-release builds. This defines how many most recent
 // builds to retain
 const nBuildsToRetainPreRel = 5
 
+type BuildType string
+
 const (
-	buildTypePreRel = "prerel"
-	buildTypeRel    = "rel"
+	buildTypePreRel BuildType = "prerel"
+	buildTypeRel    BuildType = "rel"
 )
 
-var (
-	rel32Dir = filepath.Join("out", "rel32")
-	rel64Dir = filepath.Join("out", "rel64")
-)
-
-func getRemotePaths(buildType string) []string {
+func getRemotePaths(buildType BuildType) []string {
 	if buildType == buildTypePreRel {
 		return []string{
 			"software/sumatrapdf/sumatralatest.js",
@@ -37,6 +35,14 @@ func getRemotePaths(buildType string) []string {
 			"software/sumatrapdf/sumpdf-prerelease-update.txt",
 		}
 	}
+
+	// if buildType == buildTypeDaily {
+	// 	return []string{
+	// 		"software/sumatrapdf/sumatralatest-daily.js",
+	// 		"software/sumatrapdf/sumpdf-daily-latest.txt",
+	// 		"software/sumatrapdf/sumpdf-daily-update.txt",
+	// 	}
+	// }
 
 	if buildType == buildTypeRel {
 		return []string{
@@ -50,16 +56,8 @@ func getRemotePaths(buildType string) []string {
 	return nil
 }
 
-func isValidBuildType(buildType string) bool {
-	switch buildType {
-	case buildTypePreRel, buildTypeRel:
-		return true
-	}
-	return false
-}
-
 // this returns version to be used in uploaded file names
-func getVerForBuildType(buildType string) string {
+func getVerForBuildType(buildType BuildType) string {
 	switch buildType {
 	case buildTypePreRel:
 		// this is linear build number like "12223"
@@ -72,10 +70,9 @@ func getVerForBuildType(buildType string) string {
 	return ""
 }
 
-func getRemoteDir(buildType string) string {
-	panicIf(!isValidBuildType(buildType), "invalid build type: '%s'", buildType)
+func getRemoteDir(buildType BuildType) string {
 	ver := getVerForBuildType(buildType)
-	return "software/sumatrapdf/" + buildType + "/" + ver + "/"
+	return "software/sumatrapdf/" + string(buildType) + "/" + ver + "/"
 }
 
 type DownloadUrls struct {
@@ -83,30 +80,40 @@ type DownloadUrls struct {
 	portableExe64 string
 	portableZip64 string
 
+	installerArm64   string
+	portableExeArm64 string
+	portableZipArm64 string
+
 	installer32   string
 	portableExe32 string
 	portableZip32 string
 }
 
-func getDownloadUrlsForPrefix(prefix string, buildType string, ver string) *DownloadUrls {
+func getDownloadUrlsForPrefix(prefix string, buildType BuildType, ver string) *DownloadUrls {
 	// zip is like .exe but can be half the size due to compression
 	res := &DownloadUrls{
-		installer64:   prefix + "SumatraPDF-${ver}-64-install.exe",
-		portableExe64: prefix + "SumatraPDF-${ver}-64.exe",
-		portableZip64: prefix + "SumatraPDF-${ver}-64.zip",
-		installer32:   prefix + "SumatraPDF-${ver}-install.exe",
-		portableExe32: prefix + "SumatraPDF-${ver}.exe",
-		portableZip32: prefix + "SumatraPDF-${ver}.zip",
+		installer64:      prefix + "SumatraPDF-${ver}-64-install.exe",
+		portableExe64:    prefix + "SumatraPDF-${ver}-64.exe",
+		portableZip64:    prefix + "SumatraPDF-${ver}-64.zip",
+		installerArm64:   prefix + "SumatraPDF-${ver}-arm64-install.exe",
+		portableExeArm64: prefix + "SumatraPDF-${ver}-arm64.exe",
+		portableZipArm64: prefix + "SumatraPDF-${ver}-arm64.zip",
+		installer32:      prefix + "SumatraPDF-${ver}-install.exe",
+		portableExe32:    prefix + "SumatraPDF-${ver}.exe",
+		portableZip32:    prefix + "SumatraPDF-${ver}.zip",
 	}
-	if buildType == buildTypePreRel {
-		// for pre-release, ${ver} is encoded prefix
+	if buildType != buildTypeRel {
+		// for pre-release and daily, ${ver} is encoded prefix
 		res = &DownloadUrls{
-			installer64:   prefix + "SumatraPDF-prerel-64-install.exe",
-			portableExe64: prefix + "SumatraPDF-prerel-64.exe",
-			portableZip64: prefix + "SumatraPDF-prerel-64.zip",
-			installer32:   prefix + "SumatraPDF-prerel-install.exe",
-			portableExe32: prefix + "SumatraPDF-prerel.exe",
-			portableZip32: prefix + "SumatraPDF-prerel.zip",
+			installer64:      prefix + "SumatraPDF-prerel-64-install.exe",
+			portableExe64:    prefix + "SumatraPDF-prerel-64.exe",
+			portableZip64:    prefix + "SumatraPDF-prerel-64.zip",
+			installerArm64:   prefix + "SumatraPDF-prerel-arm64-install.exe",
+			portableExeArm64: prefix + "SumatraPDF-prerel-arm64.exe",
+			portableZipArm64: prefix + "SumatraPDF-prerel-arm64.zip",
+			installer32:      prefix + "SumatraPDF-prerel-install.exe",
+			portableExe32:    prefix + "SumatraPDF-prerel.exe",
+			portableZip32:    prefix + "SumatraPDF-prerel.zip",
 		}
 	}
 	rplc := func(s *string) {
@@ -116,6 +123,9 @@ func getDownloadUrlsForPrefix(prefix string, buildType string, ver string) *Down
 	rplc(&res.installer64)
 	rplc(&res.portableExe64)
 	rplc(&res.portableZip64)
+	rplc(&res.installerArm64)
+	rplc(&res.portableExeArm64)
+	rplc(&res.portableZipArm64)
 	rplc(&res.installer32)
 	rplc(&res.portableExe32)
 	rplc(&res.portableZip32)
@@ -126,10 +136,13 @@ func genUpdateTxt(urls *DownloadUrls, ver string) string {
 	s := `[SumatraPDF]
 Latest: ${ver}
 Installer64: ${inst64}
+InstallerArm64: ${instArm64}
 Installer32: ${inst32}
 PortableExe64: ${exe64}
+PortableExeArm64: ${exeArm64}
 PortableExe32: ${exe32}
 PortableZip64: ${zip64}
+PortableZipArm64: ${zipArm64}
 PortableZip32: ${zip32}
 `
 	rplc := func(old, new string) {
@@ -137,10 +150,13 @@ PortableZip32: ${zip32}
 	}
 	rplc("${ver}", ver)
 	rplc("${inst64}", urls.installer64)
+	rplc("${instArm64}", urls.installerArm64)
 	rplc("${inst32}", urls.installer32)
 	rplc("${exe64}", urls.portableExe64)
+	rplc("${exeArm64}", urls.portableExeArm64)
 	rplc("${exe32}", urls.portableExe32)
 	rplc("${zip64}", urls.portableZip64)
+	rplc("${zipArm64}", urls.portableZipArm64)
 	rplc("${zip32}", urls.portableZip32)
 	return s
 }
@@ -153,19 +169,19 @@ func testGenUpdateTxt() {
 	os.Exit(0)
 }
 
-func getDownloadUrlsViaWebsite(buildType string, ver string) *DownloadUrls {
-	prefix := "https://www.sumatrapdfreader.org/dl/" + buildType + "/" + ver + "/"
+func getDownloadUrlsViaWebsite(buildType BuildType, ver string) *DownloadUrls {
+	prefix := "https://www.sumatrapdfreader.org/dl/" + string(buildType) + "/" + ver + "/"
 	return getDownloadUrlsForPrefix(prefix, buildType, ver)
 }
 
-func getDownloadUrlsDirectS3(mc *minio.Client, buildType string, ver string) *DownloadUrls {
+func getDownloadUrlsDirectS3(mc *minioutil.Client, buildType BuildType, ver string) *DownloadUrls {
 	prefix := mc.URLBase()
 	prefix += getRemoteDir(buildType)
 	return getDownloadUrlsForPrefix(prefix, buildType, ver)
 }
 
 // sumatrapdf/sumatralatest.js
-func createSumatraLatestJs(mc *minio.Client, buildType string) string {
+func createSumatraLatestJs(mc *minioutil.Client, buildType BuildType) string {
 	var appName string
 	switch buildType {
 	case buildTypePreRel:
@@ -184,9 +200,16 @@ func createSumatraLatestJs(mc *minio.Client, buildType string) string {
 	//host + "software/sumatrapdf/" + buildType
 
 	// new version that redirects via www.sumatrapdfreader.org/dl/
-	host := "https://www.sumatrapdfreader.org/dl/prerel/" + ver
-	if buildType == buildTypeRel {
+	var host string
+	switch buildType {
+	case buildTypeRel:
 		host = "https://www.sumatrapdfreader.org/dl/rel/" + ver
+	case buildTypePreRel:
+		host = "https://www.sumatrapdfreader.org/dl/prerel/" + ver
+	// case buildTypeDaily:
+	// 	host = "https://www.sumatrapdfreader.org/dl/daily/" + ver
+	default:
+		panicIf(true, "unsupported buildType: '%s'", buildType)
 	}
 
 	// TODO: use
@@ -207,6 +230,12 @@ var sumLatestExe64       = "{{.Host}}/{{.Prefix}}-64.exe";
 var sumLatestExeZip64    = "{{.Host}}/{{.Prefix}}-64.zip";
 var sumLatestPdb64       = "{{.Host}}/{{.Prefix}}-64.pdb.zip";
 var sumLatestInstaller64 = "{{.Host}}/{{.Prefix}}-64-install.exe";
+
+var sumLatestExeArm64       = "{{.Host}}/{{.Prefix}}-arm64.exe";
+var sumLatestExeZipArm64    = "{{.Host}}/{{.Prefix}}-arm64.zip";
+var sumLatestPdbArm64       = "{{.Host}}/{{.Prefix}}-arm64.pdb.zip";
+var sumLatestInstallerArm64 = "{{.Host}}/{{.Prefix}}-arm64-install.exe";
+
 `
 	sha1 := getGitSha1()
 	d := map[string]interface{}{
@@ -216,14 +245,14 @@ var sumLatestInstaller64 = "{{.Host}}/{{.Prefix}}-64-install.exe";
 		"CurrDate": currDate,
 		"Prefix":   appName + "-" + ver,
 	}
-	// for prerel, version is in path, not in name
+	// for prerel / daily, version is in path, not in name
 	if buildType == buildTypePreRel {
 		d["Prefix"] = appName
 	}
 	return execTextTemplate(tmplText, d)
 }
 
-func getVersionFilesForLatestInfo(mc *minio.Client, buildType string) [][]string {
+func getVersionFilesForLatestInfo(mc *minioutil.Client, buildType BuildType) [][]string {
 	panicIf(buildType == buildTypeRel)
 	remotePaths := getRemotePaths(buildType)
 	var res [][]string
@@ -255,7 +284,7 @@ func getVersionFilesForLatestInfo(mc *minio.Client, buildType string) [][]string
 
 // we shouldn't re-upload files. We upload manifest-${ver}.txt last, so we
 // consider a pre-release build already present in s3 if manifest file exists
-func verifyBuildNotInStorageMust(mc *minio.Client, buildType string) {
+func isBuildAlreadyUploaded(mc *minioutil.Client, buildType BuildType) bool {
 	dirRemote := getRemoteDir(buildType)
 	ver := getVerForBuildType(buildType)
 	fname := "SumatraPDF-prerel-manifest.txt"
@@ -264,10 +293,19 @@ func verifyBuildNotInStorageMust(mc *minio.Client, buildType string) {
 	}
 	remotePath := path.Join(dirRemote, fname)
 	exists := mc.Exists(remotePath)
-	panicIf(exists, "build of type '%s' for ver '%s' already exists because '%s' exists\n", buildType, ver, mc.URLForPath(remotePath))
+	if exists {
+		logf(ctx(), "build of type '%s' for ver '%s' already exists because '%s' exists\n", buildType, ver, mc.URLForPath(remotePath))
+
+	}
+	return exists
 }
 
-func UploadDir(c *minio.Client, dirRemote string, dirLocal string, public bool) error {
+func verifyBuildNotInStorageMust(mc *minioutil.Client, buildType BuildType) {
+	exists := isBuildAlreadyUploaded(mc, buildType)
+	panicIf(exists, "build already exists")
+}
+
+func UploadDir(c *minioutil.Client, dirRemote string, dirLocal string, public bool) error {
 	files, err := ioutil.ReadDir(dirLocal)
 	if err != nil {
 		return err
@@ -287,28 +325,30 @@ func UploadDir(c *minio.Client, dirRemote string, dirLocal string, public bool) 
 	return nil
 }
 
+func getFinalDirForBuildType(buildType BuildType) string {
+	var dir string
+	switch buildType {
+	case buildTypeRel:
+		dir = "final-rel"
+	case buildTypePreRel:
+		dir = "final-prerel"
+	// case buildTypeDaily:
+	// 	dir = "final-daily"
+	default:
+		panicIf(true, "invalid buildType '%s'", buildType)
+	}
+	return filepath.Join("out", dir)
+}
+
 // https://kjkpubsf.sfo2.digitaloceanspaces.com/software/sumatrapdf/prerel/1024/SumatraPDF-prerelease-install.exe etc.
-func minioUploadBuildMust(mc *minio.Client, buildType string) {
+func minioUploadBuildMust(mc *minioutil.Client, buildType BuildType) {
 	timeStart := time.Now()
 	defer func() {
 		logf(ctx(), "Uploaded build '%s' to %s in %s\n", buildType, mc.URLBase(), time.Since(timeStart))
 	}()
 
 	dirRemote := getRemoteDir(buildType)
-	getFinalDirForBuildType := func() string {
-		var dir string
-		switch buildType {
-		case buildTypeRel:
-			dir = "final-rel"
-		case buildTypePreRel:
-			dir = "final-prerel"
-		default:
-			panicIf(true, "invalid buildType '%s'", buildType)
-		}
-		return filepath.Join("out", dir)
-	}
-
-	dirLocal := getFinalDirForBuildType()
+	dirLocal := getFinalDirForBuildType(buildType)
 
 	err := UploadDir(mc, dirRemote, dirLocal, true)
 	must(err)
@@ -319,7 +359,7 @@ func minioUploadBuildMust(mc *minio.Client, buildType string) {
 		return
 	}
 
-	uploadBuildUpdateInfoMust := func(buildType string) {
+	uploadBuildUpdateInfoMust := func(buildType BuildType) {
 		files := getVersionFilesForLatestInfo(mc, buildType)
 		for _, f := range files {
 			remotePath := f[0]
@@ -371,11 +411,19 @@ func groupFilesByVersion(files []string) []*filesByVer {
 	return res
 }
 
-func minioDeleteOldBuildsPrefix(mc *minio.Client, buildType string) {
-	panicIf(buildType == buildTypeRel, "can't delete release builds")
-
+func minioDeleteOldBuildsPrefix(mc *minioutil.Client, buildType BuildType) {
 	nBuildsToRetain := nBuildsToRetainPreRel
-	remoteDir := "software/sumatrapdf/prerel/"
+	var remoteDir string
+	switch buildType {
+	case buildTypeRel:
+		panicIf(true, "can't delete release builds")
+	case buildTypePreRel:
+		remoteDir = "software/sumatrapdf/prerel/"
+	// case buildTypeDaily:
+	// 	remoteDir = "software/sumatrapdf/daily/"
+	default:
+		panicIf(true, "unsupported buildType: '%s'", buildType)
+	}
 	objectsCh := mc.ListObjects(remoteDir)
 	var keys []string
 	for f := range objectsCh {
@@ -403,45 +451,34 @@ func minioDeleteOldBuildsPrefix(mc *minio.Client, buildType string) {
 	}
 }
 
-func newMinioSpacesClient() *minio.Client {
-	config := &minio.Config{
-		Bucket:   "kjkpubsf",
-		Endpoint: "sfo2.digitaloceanspaces.com",
-		Access:   os.Getenv("SPACES_KEY"),
-		Secret:   os.Getenv("SPACES_SECRET"),
-	}
-	mc, err := minio.New(config)
-	must(err)
-	return mc
-}
-
-func newMinioS3Client() *minio.Client {
-	config := &minio.Config{
-		Bucket:   "kjkpub",
-		Endpoint: "s3.amazonaws.com",
-		Access:   os.Getenv("AWS_ACCESS"),
-		Secret:   os.Getenv("AWS_SECRET"),
-	}
-	mc, err := minio.New(config)
-	must(err)
-	return mc
-}
-
-func newMinioBackblazeClient() *minio.Client {
-	config := &minio.Config{
+func newMinioBackblazeClient() *minioutil.Client {
+	config := &minioutil.Config{
 		Bucket:   "kjk-files",
 		Endpoint: "s3.us-west-001.backblazeb2.com",
 		Access:   os.Getenv("BB_ACCESS"),
 		Secret:   os.Getenv("BB_SECRET"),
 	}
-	mc, err := minio.New(config)
+	mc, err := minioutil.New(config)
 	must(err)
 	return mc
 }
 
-func uploadToStorage(opts *BuildOptions, buildType string) {
-	if !opts.upload {
-		logf(ctx(), "uploadToStorage: skipping because opts.upload = false\n")
+func newMinioR2Client() *minioutil.Client {
+	config := &minioutil.Config{
+		Bucket:   "files",
+		Endpoint: "71694ef61795ecbe1bc331d217dbd7a7.r2.cloudflarestorage.com",
+		Access:   os.Getenv("R2_ACCESS"),
+		Secret:   os.Getenv("R2_SECRET"),
+	}
+	mc, err := minioutil.New(config)
+	must(err)
+	return mc
+}
+
+func uploadToStorage(buildType BuildType) {
+	isUploaded := isBuildAlreadyUploaded(newMinioBackblazeClient(), buildType)
+	if isUploaded {
+		logf(ctx(), "uploadToStorage: skipping upload because already uploaded")
 		return
 	}
 
@@ -453,24 +490,13 @@ func uploadToStorage(opts *BuildOptions, buildType string) {
 
 	wg.Add(1)
 	go func() {
-		mc := newMinioBackblazeClient()
+		mc := newMinioR2Client()
 		minioUploadBuildMust(mc, buildType)
-		if buildType == buildTypePreRel {
-			minioDeleteOldBuildsPrefix(mc, buildTypePreRel)
+		if buildType != buildTypeRel {
+			minioDeleteOldBuildsPrefix(mc, buildType)
 		}
 		wg.Done()
 	}()
-
-	wg.Add(1)
-	go func() {
-		mc := newMinioS3Client()
-		minioUploadBuildMust(mc, buildType)
-		if buildType == buildTypePreRel {
-			minioDeleteOldBuildsPrefix(mc, buildTypePreRel)
-		}
-		wg.Done()
-	}()
-	wg.Wait()
 
 	// downloads of pre-release 64-bit installer often fail
 	// I suspect cloudflare backblaze proxy is caching 404 responses and 64-bit are hit
@@ -480,19 +506,36 @@ func uploadToStorage(opts *BuildOptions, buildType string) {
 	// world (including cloudflare)
 	// Alternatively: could do http get against the file until I can see it. Better than arbitrary delay but still
 	// no guarantees the files will be visible from other networks
-	if buildType == buildTypePreRel {
-		logf(ctx(), "uploadToStorage: delay do spaces upload by 5 min to make backblaze files visible to cloudflare proxy\n")
-		time.Sleep(time.Minute * 5)
-	}
+	// if buildType != buildTypeRel {
+	// 	logf(ctx(), "uploadToStorage: delay do spaces upload by 5 min to make backblaze files visible to cloudflare proxy\n")
+	// 	time.Sleep(time.Minute * 5)
+	// }
 
 	wg.Add(1)
 	go func() {
-		mc := newMinioSpacesClient()
+		mc := newMinioBackblazeClient()
 		minioUploadBuildMust(mc, buildType)
-		if buildType == buildTypePreRel {
-			minioDeleteOldBuildsPrefix(mc, buildTypePreRel)
+		if buildType != buildTypeRel {
+			minioDeleteOldBuildsPrefix(mc, buildType)
 		}
 		wg.Done()
 	}()
+
 	wg.Wait()
+}
+
+func uploadLogView() {
+	logf(ctx(), "uploadLogView\n")
+	ver := extractLogViewVersion()
+	path := filepath.Join("tools", "logview-win", "build", "bin", "logview.exe")
+	panicIf(!fileExists(path), "file '%s' doesn't exist", path)
+	remotePath := "software/logview/rel/" + fmt.Sprintf("logview-%s.exe", ver)
+	mc := newMinioBackblazeClient()
+	if mc.Exists(remotePath) {
+		logf(ctx(), "%s (%s) already uploaded\n", remotePath, mc.URLForPath(remotePath))
+		return
+	}
+	mc.UploadFile(remotePath, path, true)
+	sizeStr := u.FmtSizeHuman(getFileSize(path))
+	logf(ctx(), "Uploaded %s of size %s as %s\n", path, sizeStr, mc.URLForPath(remotePath))
 }

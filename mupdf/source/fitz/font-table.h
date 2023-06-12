@@ -79,6 +79,16 @@ FONT(sil,	CharisSIL_Bold_cff,		"Charis SIL",		ANY_SCRIPT,	FZ_LANG_UNSET,	NO_SUBF
 FONT(sil,	CharisSIL_BoldItalic_cff,	"Charis SIL",		ANY_SCRIPT,	FZ_LANG_UNSET,	NO_SUBFONT,	BOLD|ITALIC)
 #endif
 
+/* SumatraPDF: TODO: just undef TOFU_NOTO, but that's a lot fonts to add to fonts_*.asm */
+#ifdef TOFU_NOTO_SUMATRA
+FONT(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_LATIN,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_GREEK,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_CYRILLIC,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_COMMON,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_INHERITED,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_UNKNOWN,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
+#endif
+
 #ifndef TOFU_NOTO
 FONT(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_LATIN,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
 ALIAS(noto,	NotoSerif_Regular_otf,	"Noto Serif",	UCDN_SCRIPT_GREEK,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
@@ -262,6 +272,8 @@ FONT(noto,	NotoSansSymbols2_Regular_otf,	"Noto Sans Symbols2",	MUPDF_SCRIPT_SYMB
 FONT(noto,	NotoEmoji_Regular_ttf,		"Noto Emoji",		MUPDF_SCRIPT_EMOJI,	FZ_LANG_UNSET,	NO_SUBFONT,	REGULAR)
 #endif
 
+#endif /* TOFU_NOTO */
+
 #ifndef TOFU_CJK
 #ifndef TOFU_CJK_EXT
 #ifndef TOFU_CJK_LANG
@@ -298,5 +310,3 @@ ALIAS(droid,	DroidSansFallback_ttf,		"Droid Sans Fallback",		UCDN_SCRIPT_BOPOMOF
 
 #endif
 #endif
-
-#endif /* TOFU_NOTO */

@@ -174,10 +174,43 @@ HEXDUMP_SH := scripts/hexdump.sh
 
 FONT_BIN := $(sort $(wildcard resources/fonts/urw/*.cff))
 FONT_BIN += $(sort $(wildcard resources/fonts/han/*.ttc))
-FONT_BIN += $(sort $(wildcard resources/fonts/droid/*.ttf))
+FONT_BIN += $(sort $(wildcard resources/fonts/droid/DroidSansFallbackFull.ttf))
+FONT_BIN += $(sort $(wildcard resources/fonts/droid/DroidSansFallback.ttf))
 FONT_BIN += $(sort $(wildcard resources/fonts/noto/*.otf))
 FONT_BIN += $(sort $(wildcard resources/fonts/noto/*.ttf))
 FONT_BIN += $(sort $(wildcard resources/fonts/sil/*.cff))
+
+# Note: The tests here must match the equivalent tests in noto.c
+
+ifneq ($(filter -DTOFU_CJK,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/han/%.ttc, $(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/droid/DroidSansFallbackFull.ttf, $(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/droid/DroidSansFallback.ttf, $(FONT_BIN))
+endif
+
+ifneq ($(filter -DTOFU_CJK_EXT,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/han/%.ttc, $(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/droid/DroidSansFallbackFull.ttf, $(FONT_BIN))
+endif
+
+ifneq ($(filter -DTOFU_CJK_LANG,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/han/%.ttc, $(FONT_BIN))
+endif
+
+ifneq ($(filter -DTOFU,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/noto/%.otf,$(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/noto/%.ttf,$(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/sil/%.cff,$(FONT_BIN))
+endif
+
+ifneq ($(filter -DTOFU_NOTO,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/noto/%.otf,$(FONT_BIN))
+  FONT_BIN := $(filter-out resources/fonts/noto/%.ttf,$(FONT_BIN))
+endif
+
+ifneq ($(filter -DTOFU_SIL,$(XCFLAGS)),)
+  FONT_BIN := $(filter-out resources/fonts/sil/%.cff,$(FONT_BIN))
+endif
 
 FONT_GEN := $(FONT_BIN:%=generated/%.c)
 
@@ -449,9 +482,6 @@ java:
 java-clean:
 	$(MAKE) -C platform/java build=$(build) clean
 
-wasm:
-	$(MAKE) -C platform/wasm
-
 extract-test:
 	$(MAKE) debug
 	$(MAKE) -C thirdparty/extract mutool=../../build/debug/mutool test-mutool
@@ -502,10 +532,10 @@ android: generate
 c++: c++-$(build)
 
 c++-release: shared-release
-	./scripts/mupdfwrap.py -d build/shared-release -b 01
+	./scripts/mupdfwrap.py --venv pylocal -d build/shared-release -b 01
 
 c++-debug: shared-debug
-	./scripts/mupdfwrap.py -d build/shared-debug -b 01
+	./scripts/mupdfwrap.py --venv pylocal -d build/shared-debug -b 01
 
 c++-clean:
 	rm -rf platform/c++
@@ -532,7 +562,7 @@ csharp-debug: c++-debug
 csharp-clean:
 	rm -rf platform/csharp
 
-.PHONY: all clean nuke install third libs apps generate tags wasm
+.PHONY: all clean nuke install third libs apps generate tags
 .PHONY: shared shared-debug shared-clean
 .PHONY: c++ c++-release c++-debug c++-clean
 .PHONY: python python-debug python-clean

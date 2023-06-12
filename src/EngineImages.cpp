@@ -1022,7 +1022,111 @@ EngineBase* CreateEngineImageDirFromFile(const char* fileName) {
 
 ///// CbxEngine handles comic book files (either .cbz, .cbr, .cb7 or .cbt) /////
 
-class EngineCbx : public EngineImages, public json::ValueVisitor {
+struct ComicInfoParser : json::ValueVisitor {
+    // extracted metadata
+    AutoFreeStr propTitle;
+    StrVec propAuthors;
+    AutoFreeStr propDate;
+    AutoFreeStr propModDate;
+    AutoFreeStr propCreator;
+    AutoFreeStr propSummary;
+    // temporary state needed for extracting metadata
+    AutoFreeStr propAuthorTmp;
+
+    // json::ValueVisitor
+    bool Visit(const char* path, const char* value, json::Type type) override;
+
+    void Parse(const ByteSlice& xmlData);
+};
+
+static char* GetTextContent(HtmlPullParser& parser) {
+    HtmlToken* tok = parser.Next();
+    if (!tok || !tok->IsText()) {
+        return nullptr;
+    }
+    return ResolveHtmlEntities(tok->s, tok->sLen);
+}
+
+// extract ComicInfo.xml metadata
+// cf. http://comicrack.cyolito.com/downloads/comicrack/ComicRack/Support-Files/ComicInfoSchema.zip/
+void ComicInfoParser::Parse(const ByteSlice& xmlData) {
+    // TODO: convert UTF-16 data and skip UTF-8 BOM
+    HtmlPullParser parser(xmlData);
+    HtmlToken* tok;
+    while ((tok = parser.Next()) != nullptr && !tok->IsError()) {
+        if (!tok->IsStartTag()) {
+            continue;
+        }
+        if (tok->NameIs("Title")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/ComicBookInfo/1.0/title", value, json::Type::String);
+            }
+        } else if (tok->NameIs("Year")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/ComicBookInfo/1.0/publicationYear", value, json::Type::Number);
+            }
+        } else if (tok->NameIs("Month")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/ComicBookInfo/1.0/publicationMonth", value, json::Type::Number);
+            }
+        } else if (tok->NameIs("Summary")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/X-summary", value, json::Type::String);
+            }
+        } else if (tok->NameIs("Writer")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/ComicBookInfo/1.0/credits[0]/person", value, json::Type::String);
+                Visit("/ComicBookInfo/1.0/credits[0]/primary", "true", json::Type::Bool);
+            }
+        } else if (tok->NameIs("Penciller")) {
+            AutoFreeStr value = GetTextContent(parser);
+            if (value) {
+                Visit("/ComicBookInfo/1.0/credits[1]/person", value, json::Type::String);
+                Visit("/ComicBookInfo/1.0/credits[1]/primary", "true", json::Type::Bool);
+            }
+        }
+    }
+}
+
+// extract ComicBookInfo metadata
+// http://code.google.com/p/comicbookinfo/
+bool ComicInfoParser::Visit(const char* path, const char* value, json::Type type) {
+    if (json::Type::String == type && str::Eq(path, "/ComicBookInfo/1.0/title")) {
+        propTitle.Set(str::Dup(value));
+    } else if (json::Type::Number == type && str::Eq(path, "/ComicBookInfo/1.0/publicationYear")) {
+        propDate.Set(str::Format("%s/%d", propDate ? propDate.Get() : "", atoi(value)));
+    } else if (json::Type::Number == type && str::Eq(path, "/ComicBookInfo/1.0/publicationMonth")) {
+        propDate.Set(str::Format("%d%s", atoi(value), propDate ? propDate.Get() : ""));
+    } else if (json::Type::String == type && str::Eq(path, "/appID")) {
+        propCreator.Set(str::Dup(value));
+    } else if (json::Type::String == type && str::Eq(path, "/lastModified")) {
+        propModDate.Set(str::Dup(value));
+    } else if (json::Type::String == type && str::Eq(path, "/X-summary")) {
+        propSummary.Set(str::Dup(value));
+    } else if (str::StartsWith(path, "/ComicBookInfo/1.0/credits[")) {
+        int idx = -1;
+        const char* prop = str::Parse(path, "/ComicBookInfo/1.0/credits[%d]/", &idx);
+        if (prop) {
+            if (json::Type::String == type && str::Eq(prop, "person")) {
+                propAuthorTmp.Set(str::Dup(value));
+            } else if (json::Type::Bool == type && str::Eq(prop, "primary") && propAuthorTmp &&
+                       !propAuthors.Contains(propAuthorTmp)) {
+                propAuthors.Append(propAuthorTmp.Get());
+            }
+        }
+        return true;
+    }
+    // stop parsing once we have all desired information
+    return !propTitle || propAuthors.size() == 0 || !propCreator || !propDate ||
+           str::FindChar(propDate, '/') <= propDate;
+}
+
+class EngineCbx : public EngineImages {
   public:
     explicit EngineCbx(MultiFormatArchive* arch);
     ~EngineCbx() override;
@@ -1035,14 +1139,8 @@ class EngineCbx : public EngineImages, public json::ValueVisitor {
 
     TocTree* GetToc() override;
 
-    // json::ValueVisitor
-    bool Visit(const char* path, const char* value, json::Type type) override;
-
     static EngineBase* CreateFromFile(const char* path);
     static EngineBase* CreateFromStream(IStream* stream);
-
-    // an image for each page
-    Vec<ByteSlice> images;
 
   protected:
     Bitmap* LoadBitmapForPage(int pageNo, bool& deleteAfterUse) override;
@@ -1053,22 +1151,13 @@ class EngineCbx : public EngineImages, public json::ValueVisitor {
     bool FinishLoading();
 
     ByteSlice GetImageData(int pageNo);
-    void ParseComicInfoXml(const ByteSlice& xmlData);
 
     // access to cbxFile must be protected after initialization (with cacheAccess)
     MultiFormatArchive* cbxFile = nullptr;
     Vec<MultiFormatArchive::FileInfo*> files;
     TocTree* tocTree = nullptr;
 
-    // extracted metadata
-    AutoFreeStr propTitle;
-    StrVec propAuthors;
-    AutoFreeStr propDate;
-    AutoFreeStr propModDate;
-    AutoFreeStr propCreator;
-    AutoFreeStr propSummary;
-    // temporary state needed for extracting metadata
-    AutoFreeStr propAuthorTmp;
+    ComicInfoParser cip;
 };
 
 // TODO: refactor so that doesn't have to keep <arch>
@@ -1079,13 +1168,7 @@ EngineCbx::EngineCbx(MultiFormatArchive* arch) {
 
 EngineCbx::~EngineCbx() {
     delete tocTree;
-
     delete cbxFile;
-
-    for (auto&& img : images) {
-        if (!img.empty())
-            str::Free(img);
-    }
 }
 
 EngineBase* EngineCbx::Clone() {
@@ -1189,12 +1272,12 @@ bool EngineCbx::FinishLoading() {
 
     ByteSlice metadata = cbxFile->GetFileDataByName("ComicInfo.xml");
     if (metadata) {
-        ParseComicInfoXml(metadata);
+        cip.Parse(metadata);
         metadata.Free();
     }
     const char* comment = cbxFile->GetComment();
     if (comment) {
-        json::Parse(comment, this);
+        json::Parse(comment, &cip);
     }
 
     int nFiles = pageFiles.isize();
@@ -1233,11 +1316,6 @@ bool EngineCbx::FinishLoading() {
         tocTree = new TocTree(realRoot);
     }
 
-    for (int i = 0; i < pageCount; i++) {
-        // actual image load will be performed in EngineCbx::GetImageData
-        images.Append({});
-    }
-
     return true;
 }
 
@@ -1247,98 +1325,9 @@ TocTree* EngineCbx::GetToc() {
 
 ByteSlice EngineCbx::GetImageData(int pageNo) {
     CrashIf((pageNo < 1) || (pageNo > PageCount()));
-    if (!images[pageNo - 1].empty())
-        return images[pageNo - 1];
-    // decompress image data
     size_t fileId = files[pageNo - 1]->fileId;
-    return images[pageNo - 1] = cbxFile->GetFileDataById(fileId);
-}
-
-static char* GetTextContent(HtmlPullParser& parser) {
-    HtmlToken* tok = parser.Next();
-    if (!tok || !tok->IsText()) {
-        return nullptr;
-    }
-    return ResolveHtmlEntities(tok->s, tok->sLen);
-}
-
-// extract ComicInfo.xml metadata
-// cf. http://comicrack.cyolito.com/downloads/comicrack/ComicRack/Support-Files/ComicInfoSchema.zip/
-void EngineCbx::ParseComicInfoXml(const ByteSlice& xmlData) {
-    // TODO: convert UTF-16 data and skip UTF-8 BOM
-    HtmlPullParser parser(xmlData);
-    HtmlToken* tok;
-    while ((tok = parser.Next()) != nullptr && !tok->IsError()) {
-        if (!tok->IsStartTag()) {
-            continue;
-        }
-        if (tok->NameIs("Title")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/ComicBookInfo/1.0/title", value, json::Type::String);
-            }
-        } else if (tok->NameIs("Year")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/ComicBookInfo/1.0/publicationYear", value, json::Type::Number);
-            }
-        } else if (tok->NameIs("Month")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/ComicBookInfo/1.0/publicationMonth", value, json::Type::Number);
-            }
-        } else if (tok->NameIs("Summary")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/X-summary", value, json::Type::String);
-            }
-        } else if (tok->NameIs("Writer")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/ComicBookInfo/1.0/credits[0]/person", value, json::Type::String);
-                Visit("/ComicBookInfo/1.0/credits[0]/primary", "true", json::Type::Bool);
-            }
-        } else if (tok->NameIs("Penciller")) {
-            AutoFreeStr value = GetTextContent(parser);
-            if (value) {
-                Visit("/ComicBookInfo/1.0/credits[1]/person", value, json::Type::String);
-                Visit("/ComicBookInfo/1.0/credits[1]/primary", "true", json::Type::Bool);
-            }
-        }
-    }
-}
-
-// extract ComicBookInfo metadata
-// http://code.google.com/p/comicbookinfo/
-bool EngineCbx::Visit(const char* path, const char* value, json::Type type) {
-    if (json::Type::String == type && str::Eq(path, "/ComicBookInfo/1.0/title")) {
-        propTitle.Set(str::Dup(value));
-    } else if (json::Type::Number == type && str::Eq(path, "/ComicBookInfo/1.0/publicationYear")) {
-        propDate.Set(str::Format("%s/%d", propDate ? propDate.Get() : "", atoi(value)));
-    } else if (json::Type::Number == type && str::Eq(path, "/ComicBookInfo/1.0/publicationMonth")) {
-        propDate.Set(str::Format("%d%s", atoi(value), propDate ? propDate.Get() : ""));
-    } else if (json::Type::String == type && str::Eq(path, "/appID")) {
-        propCreator.Set(str::Dup(value));
-    } else if (json::Type::String == type && str::Eq(path, "/lastModified")) {
-        propModDate.Set(str::Dup(value));
-    } else if (json::Type::String == type && str::Eq(path, "/X-summary")) {
-        propSummary.Set(str::Dup(value));
-    } else if (str::StartsWith(path, "/ComicBookInfo/1.0/credits[")) {
-        int idx = -1;
-        const char* prop = str::Parse(path, "/ComicBookInfo/1.0/credits[%d]/", &idx);
-        if (prop) {
-            if (json::Type::String == type && str::Eq(prop, "person")) {
-                propAuthorTmp.Set(str::Dup(value));
-            } else if (json::Type::Bool == type && str::Eq(prop, "primary") && propAuthorTmp &&
-                       !propAuthors.Contains(propAuthorTmp)) {
-                propAuthors.Append(propAuthorTmp.Get());
-            }
-        }
-        return true;
-    }
-    // stop parsing once we have all desired information
-    return !propTitle || propAuthors.size() == 0 || !propCreator || !propDate ||
-           str::FindChar(propDate, '/') <= propDate;
+    ByteSlice d = cbxFile->GetFileDataById(fileId);
+    return d;
 }
 
 bool EngineCbx::SaveFileAsPDF(const char* pdfFileName) {
@@ -1347,6 +1336,7 @@ bool EngineCbx::SaveFileAsPDF(const char* pdfFileName) {
     for (int i = 1; i <= PageCount() && ok; i++) {
         ByteSlice img = GetImageData(i);
         ok = c->AddPageFromImageData(img, GetFileDPI());
+        img.Free();
     }
     if (ok) {
         c->CopyProperties(this);
@@ -1359,18 +1349,18 @@ bool EngineCbx::SaveFileAsPDF(const char* pdfFileName) {
 char* EngineCbx::GetProperty(DocumentProperty prop) {
     switch (prop) {
         case DocumentProperty::Title:
-            return str::Dup(propTitle);
+            return str::Dup(cip.propTitle);
         case DocumentProperty::Author:
-            return propAuthors.size() ? Join(propAuthors, ", ") : nullptr;
+            return cip.propAuthors.size() ? Join(cip.propAuthors, ", ") : nullptr;
         case DocumentProperty::CreationDate:
-            return str::Dup(propDate);
+            return str::Dup(cip.propDate);
         case DocumentProperty::ModificationDate:
-            return str::Dup(propModDate);
+            return str::Dup(cip.propModDate);
         case DocumentProperty::CreatorApp:
-            return str::Dup(propCreator);
+            return str::Dup(cip.propCreator);
         // TODO: replace with Prop_Summary
         case DocumentProperty::Subject:
-            return str::Dup(propSummary);
+            return str::Dup(cip.propSummary);
         default:
             return nullptr;
     }
@@ -1383,19 +1373,24 @@ Bitmap* EngineCbx::LoadBitmapForPage(int pageNo, bool& deleteAfterUse) {
         logf("EngineCbx::LoadBitmapForPage(page: %d) took %.2f ms\n", pageNo, dur);
     };
     ByteSlice img = GetImageData(pageNo);
-    if (!img.empty()) {
-        deleteAfterUse = true;
-        return BitmapFromData(img);
+    if (img.empty()) {
+        img.Free();
+        return nullptr;
     }
-    return nullptr;
+    deleteAfterUse = true;
+    auto res = BitmapFromData(img);
+    img.Free();
+    return res;
 }
 
 RectF EngineCbx::LoadMediabox(int pageNo) {
     ByteSlice img = GetImageData(pageNo);
     if (!img.empty()) {
         Size size = BitmapSizeFromData(img);
+        img.Free();
         return RectF(0, 0, (float)size.dx, (float)size.dy);
     }
+    img.Free();
 
     ImagePage* page = GetPage(pageNo, MAX_IMAGE_PAGE_CACHE == pageCache.size());
     if (page) {

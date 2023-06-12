@@ -120,21 +120,28 @@ struct PageDestinationURL : IPageDestination {
 
 struct PageDestinationFile : IPageDestination {
     char* path = nullptr;
+    char* name = nullptr;
 
     PageDestinationFile() = delete;
 
-    PageDestinationFile(const char* u) {
+    PageDestinationFile(const char* u, const char* frag) {
         CrashIf(!u);
         kind = kindDestinationLaunchFile;
         path = str::Dup(u);
+        name = str::Dup(frag);
     }
 
     ~PageDestinationFile() override {
         str::Free(path);
+        str::Free(name);
     }
 
     char* GetValue() override {
         return path;
+    }
+
+    char* GetName() override {
+        return name;
     }
 };
 

@@ -424,12 +424,13 @@ static PdfColor GetDropDownColor(const char* sv) {
 // TODO: mupdf shows it in 1.6 but not 1.7. Why?
 bool gShowRect = true;
 
+// TODO: only limit to widgets that have rect?
 static void DoRect(EditAnnotationsWindow* ew, Annotation* annot) {
     if (!gShowRect) {
         return;
     }
     str::Str s;
-    RectF rect = GetRect(annot);
+    RectF rect = GetBounds(annot);
     int x = (int)rect.x;
     int y = (int)rect.y;
     int dx = (int)rect.dx;
@@ -1420,6 +1421,18 @@ void StartEditAnnotations(WindowTab* tab, Vec<Annotation*>& annots) {
     DeleteVecMembers(annots);
 }
 
+static PdfColor GetAnnotationSquigglyColor() {
+    auto& a = gGlobalPrefs->annotations;
+    ParsedColor* parsedCol = GetParsedColor(a.squigglyColor, a.squigglyColorParsed);
+    return parsedCol->pdfCol;
+}
+
+static PdfColor GetAnnotationStrikeOutColor() {
+    auto& a = gGlobalPrefs->annotations;
+    ParsedColor* parsedCol = GetParsedColor(a.strikeOutColor, a.strikeOutColorParsed);
+    return parsedCol->pdfCol;
+}
+
 static PdfColor GetAnnotationHighlightColor() {
     auto& a = gGlobalPrefs->annotations;
     ParsedColor* parsedCol = GetParsedColor(a.highlightColor, a.highlightColorParsed);
@@ -1532,6 +1545,12 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, AnnotationType typ, 
         SetColor(res, col);
     } else if (typ == AnnotationType::Highlight) {
         auto col = GetAnnotationHighlightColor();
+        SetColor(res, col);
+    } else if (typ == AnnotationType::Squiggly) {
+        auto col = GetAnnotationSquigglyColor();
+        SetColor(res, col);
+    } else if (typ == AnnotationType::StrikeOut) {
+        auto col = GetAnnotationStrikeOutColor();
         SetColor(res, col);
     }
     pdf_drop_annot(ctx, annot);

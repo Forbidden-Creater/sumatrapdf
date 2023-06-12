@@ -66,6 +66,7 @@ function regconf()
     optimize "Size"
 
   -- no ltcg in asan builds
+  -- TODO: or arm64 ?
   filter { "configurations:Release*", "platforms:x32 or x64" }
     flags {
       "LinkTimeOptimization",
@@ -82,6 +83,8 @@ function webviewconf()
     libdirs { "packages/Microsoft.Web.WebView2.1.0.992.28/build/native/x86" }
   filter "platforms:x64 or x64_asan"
     libdirs { "packages/Microsoft.Web.WebView2.1.0.992.28/build/native/x64" }
+  filter "platforms:arm64"
+    libdirs { "packages/Microsoft.Web.WebView2.1.0.992.28/build/native/arm64" }
   filter {}
   links { "WebView2LoaderStatic.lib"}
 end
@@ -101,6 +104,7 @@ function optconf()
   runtime "Release"
 
   -- no ltcg in asan builds
+  -- TODO: or arm64 ?
   filter { "configurations:Release*", "platforms:x32 or x64" }
     flags {
       "LinkTimeOptimization",
@@ -133,7 +137,7 @@ end
 
 function zlib_defines()
   includedirs {
-    "ext/zlib-ng",
+    "ext/zlib",
   }
 end
 
@@ -153,7 +157,7 @@ end
 
 workspace "SumatraPDF"
   configurations { "Debug", "Release", "ReleaseAnalyze", }
-  platforms { "x32", "x64", "x64_asan" }
+  platforms { "x32", "x64", "arm64", "x64_asan" }
   startproject "SumatraPDF"
 
   filter "platforms:x32"
@@ -172,14 +176,14 @@ workspace "SumatraPDF"
      resdefines { "_WIN64" }
   filter {}
 
+  filter "platforms:arm64"
+     architecture "arm64"
+  filter {}
+
   disablewarnings { "4127", "4189", "4324", "4458", "4522", "4611", "4702", "4800", "6319" }
   warnings "Extra"
 
   location "this_is_invalid_location"
-
-  filter "action:vs2019"
-    location "vs2019"
-  filter {}
 
   filter "action:vs2022"
     location "vs2022"
@@ -207,6 +211,14 @@ workspace "SumatraPDF"
     targetdir "out/rel64_prefast_asan"
   filter {"platforms:x64_asan", "configurations:Debug"}
     targetdir "out/dbg64_asan"
+  filter {}
+
+  filter {"platforms:arm64", "configurations:Release"}
+    targetdir "out/arm64"
+  filter {"platforms:arm64", "configurations:ReleaseAnalyze"}
+    targetdir "out/arm64_prefast"
+  filter {"platforms:arm64", "configurations:Debug"}
+    targetdir "out/dbgarm64"
   filter {}
 
   objdir "%{cfg.targetdir}/obj"
@@ -246,6 +258,8 @@ workspace "SumatraPDF"
     language "C++"
     optconf()
     defines { "UNRAR", "RARDLL", "SILENT" }
+    -- os.hpp redefines WINVER, is there a better way?
+    disablewarnings { "4005" }
     disablewarnings { "4100", "4201", "4211", "4244", "4389", "4456", "4459", "4701", "4702", "4706", "4709", "4731", "4996" }
     -- unrar uses exception handling in savepos.hpp but I don't want to enable it
     -- as it seems to infect the Sumatra binary as well (i.e. I see bad alloc exception
@@ -349,7 +363,7 @@ workspace "SumatraPDF"
     filter {'platforms:x64 or x64_asan'}
       defines { "ARCH_X86_32=0", "ARCH_X86_64=1" }
     filter{}
-    disablewarnings { "4057", "4090", "4100", "4152", "4201", "4244", "4245", "4456", "4457", "4701", "4703", "4706", "4996" }
+    disablewarnings { "4057", "4090", "4100", "4152", "4201", "4244", "4245", "4456", "4457", "4701", "4703", "4706", "4819", "4996" }
     includedirs { "ext/dav1d/include/compat/msvc", "ext/dav1d", "ext/dav1d/include" }
      -- nasm.exe -I .\ext\libjpeg-turbo\simd\
     -- -I .\ext\libjpeg-turbo\win\ -f win32
@@ -371,6 +385,9 @@ workspace "SumatraPDF"
     filter {}
 
     dav1d_files()
+    filter {'platforms:x32 or x64 or x64_asan'}
+    dav1d_x68_files()
+    filter {}
 
   project "zlib"
     kind "StaticLib"
@@ -401,7 +418,7 @@ workspace "SumatraPDF"
 
     -- libjpeg-turbo
     defines { "_CRT_SECURE_NO_WARNINGS" }
-    disablewarnings { "4018", "4100", "4244", "4245" }
+    disablewarnings { "4018", "4100", "4244", "4245", "4819" }
     includedirs { "ext/libjpeg-turbo", "ext/libjpeg-turbo/simd" }
     -- nasm.exe -I .\ext\libjpeg-turbo\simd\
     -- -I .\ext\libjpeg-turbo\win\ -f win32
@@ -598,11 +615,97 @@ workspace "SumatraPDF"
     kind "StaticLib"
     language "C"
     optconf()
-    disablewarnings { "4018", "4100", "4132", "4204", "4244", "4245", "4267", 
+    disablewarnings { "4018", "4100", "4132", "4204", "4244", "4245", "4267",
     "4305", "4306", "4389", "4456", "4701" }
     includedirs { "ext/gumbo-parser/include", "ext/gumbo-parser/visualc/include" }
     gumbo_files()
 --]]
+
+  function fonts_old()
+    --[[ files {
+      "mupdf/font_base14.asm",
+    }
+    --]]
+    filter {"platforms:x64 or x64_asan"}
+      files {
+        "mupdf/fonts_64.asm",
+      }
+    filter {}
+
+    filter {"platforms:x32"}
+      files {
+        "mupdf/fonts_32.asm",
+      }
+    filter {}
+
+    -- .\ext\..\bin\nasm.exe -I .\mupdf\ -f win32 -o .\obj-rel\mupdf\font_base14.obj
+    -- .\mupdf\font_base14.asm
+    filter {'files:**.asm', 'platforms:x32'}
+       buildmessage 'Compiling %{file.relpath}'
+       buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
+       buildcommands {
+          '..\\bin\\nasm.exe -f win32 -I ../mupdf/ -o "%{cfg.objdir}/%{file.basename}.obj" "%{file.relpath}"'
+       }
+    filter {}
+
+    filter {'files:**.asm', 'platforms:x64 or x64_asan'}
+      buildmessage 'Compiling %{file.relpath}'
+      buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
+      buildcommands {
+        '..\\bin\\nasm.exe -f win64 -DWIN64 -I ../mupdf/ -o "%{cfg.objdir}/%{file.basename}.obj" "%{file.relpath}"'
+      }
+    filter {}
+  end
+
+  function fonts_new()
+    files {
+      "mupdf/resources/fonts/urw/Dingbats.cff",
+      "mupdf/resources/fonts/urw/NimbusMonoPS-Regular.cff",
+      "mupdf/resources/fonts/urw/NimbusMonoPS-Italic.cff",
+      "mupdf/resources/fonts/urw/NimbusMonoPS-Bold.cff",
+      "mupdf/resources/fonts/urw/NimbusMonoPS-BoldItalic.cff",
+      "mupdf/resources/fonts/urw/NimbusRoman-Regular.cff",
+      "mupdf/resources/fonts/urw/NimbusRoman-Italic.cff",
+      "mupdf/resources/fonts/urw/NimbusRoman-Bold.cff",
+      "mupdf/resources/fonts/urw/NimbusRoman-BoldItalic.cff",
+      "mupdf/resources/fonts/urw/NimbusSans-Regular.cff",
+      "mupdf/resources/fonts/urw/NimbusSans-Italic.cff",
+      "mupdf/resources/fonts/urw/NimbusSans-Bold.cff",
+      "mupdf/resources/fonts/urw/NimbusSans-BoldItalic.cff",
+      "mupdf/resources/fonts/urw/StandardSymbolsPS.cff",
+      "mupdf/resources/fonts/droid/DroidSansFallbackFull.ttf",
+      "mupdf/resources/fonts/sil/CharisSIL.cff",
+      "mupdf/resources/fonts/sil/CharisSIL-Bold.cff",
+      "mupdf/resources/fonts/sil/CharisSIL-Italic.cff",
+      "mupdf/resources/fonts/sil/CharisSIL-BoldItalic.cff",
+      "mupdf/resources/fonts/noto/NotoSans-Regular.otf",
+      "mupdf/resources/fonts/noto/NotoSerif-Regular.otf",
+    }
+
+    filter {'files:**.cff'}
+       buildmessage  '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_cff %{cfg.architecture}'
+       buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
+       buildcommands {
+          '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_cff %{cfg.architecture}'
+       }
+    filter {}
+
+    filter {'files:**.ttf'}
+       buildmessage '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_ttf %{cfg.architecture}'
+       buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
+       buildcommands {
+          '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_ttf %{cfg.architecture}'
+       }
+    filter {}
+
+    filter {'files:**.otf'}
+       buildmessage '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_otf %{cfg.architecture}'
+       buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
+       buildcommands {
+          '..\\bin\\bin2coff.exe "%{file.relpath}" "%{cfg.objdir}/%{file.basename}.obj" _binary_%{file.basename}_otf %{cfg.architecture}'
+       }
+    filter {}
+  end
 
   project "mupdf"
     kind "StaticLib"
@@ -614,11 +717,11 @@ workspace "SumatraPDF"
     defines { "OPJ_STATIC", "SHARE_JPEG" }
     -- this defines which fonts are to be excluded from being included directly
     -- we exclude the very big cjk fonts
-    defines { "TOFU_NOTO", "TOFU_CJK_LANG" }
+    defines { "TOFU_NOTO", "TOFU_CJK_LANG", "TOFU_NOTO_SUMATRA" }
 
     disablewarnings {
-      "4005", "4018", "4057", "4100", "4115", "4130", "4204", "4206", "4245", "4267",
-      "4295", "4305", "4389", "4456", "4457", "4703", "4706"
+      "4005", "4018", "4057", "4100", "4115", "4130", "4204", "4206", "4210", "4245", "4267",
+      "4295", "4305", "4389", "4456", "4457", "4703", "4706", "4819"
     }
     -- force including mupdf/scripts/openjpeg/opj_config_private.h
     -- with our build over-rides
@@ -637,24 +740,9 @@ workspace "SumatraPDF"
       "ext/lcms2/include",
       "ext/gumbo-parser/src",
       "ext/extract/include",
-  }
-    -- .\ext\..\bin\nasm.exe -I .\mupdf\ -f win32 -o .\obj-rel\mupdf\font_base14.obj
-    -- .\mupdf\font_base14.asm
-    filter {'files:**.asm', 'platforms:x32'}
-       buildmessage 'Compiling %{file.relpath}'
-       buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
-       buildcommands {
-          '..\\bin\\nasm.exe -f win32 -I ../mupdf/ -o "%{cfg.objdir}/%{file.basename}.obj" "%{file.relpath}"'
-       }
-    filter {}
-
-    filter {'files:**.asm', 'platforms:x64 or x64_asan'}
-      buildmessage 'Compiling %{file.relpath}'
-      buildoutputs { '%{cfg.objdir}/%{file.basename}.obj' }
-      buildcommands {
-        '..\\bin\\nasm.exe -f win64 -DWIN64 -I ../mupdf/ -o "%{cfg.objdir}/%{file.basename}.obj" "%{file.relpath}"'
-      }
-    filter {}
+    }
+    -- fonts_old()
+    fonts_new()
 
     mupdf_files()
     links { "mupdf-libs" }
@@ -748,10 +836,11 @@ workspace "SumatraPDF"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++latest"
+    regconf()
     includedirs { "src", "mupdf/include"}
     files { "src/tools/signfile.cpp" }
     links { "utils", "mupdf" }
-    links { "crypt32", "shlwapi" }
+    links { "crypt32", "shlwapi", "version", "Comctl32", "wininet" }
 
 
   project "plugin-test"
@@ -763,7 +852,7 @@ workspace "SumatraPDF"
     includedirs { "src" }
     files { "src/tools/plugin-test.cpp" }
     links { "utils", "mupdf" }
-    links { "shlwapi", "version", "comctl32" }
+    links { "shlwapi", "version", "comctl32", "wininet" }
 
   project "enginedump"
     kind "ConsoleApp"
@@ -777,7 +866,7 @@ workspace "SumatraPDF"
     links { "engines", "utils", "unrar", "mupdf", "unarrlib", "libwebp", "libdjvu" }
     links {
       "comctl32", "gdiplus", "msimg32", "shlwapi",
-      "version", "windowscodecs"
+      "version", "windowscodecs", "wininet"
     }
 
   project "test_util"
@@ -788,16 +877,26 @@ workspace "SumatraPDF"
     disablewarnings { "4838" }
     includedirs { "src" }
     test_util_files()
-    links { "gdiplus", "comctl32", "shlwapi", "Version" }
+    links { "gdiplus", "comctl32", "shlwapi", "Version", "wininet" }
 
-  project "logview"
+  project "sizer"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++latest"
     regconf()
-    disablewarnings { "4838" }
+    disablewarnings { "4996", "4706", "4100", "4505" }
+    includedirs { "tools/sizer" }
+    sizer_files()
+    links { "ole32.lib", "oleaut32.lib" }
+
+  project "bin2coff"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++latest"
+    regconf()
+    disablewarnings { "4200", "4838" }
     includedirs { "src" }
-    logview_files()
+    bin2coff_files()
     links { "gdiplus", "comctl32", "shlwapi", "Version" }
 
   project "PdfFilter"
@@ -812,7 +911,7 @@ workspace "SumatraPDF"
     includedirs { "src", "src/wingui", "mupdf/include" }
     search_filter_files()
     links { "utils", "unrar", "libmupdf" }
-    links { "comctl32", "gdiplus", "shlwapi", "version"  }
+    links { "comctl32", "gdiplus", "shlwapi", "version", "wininet" }
 
   project "PdfPreview"
     kind "SharedLib"
@@ -836,7 +935,7 @@ workspace "SumatraPDF"
     -- TODO: "chm" should only be for Debug config but doing links { "chm" }
     -- in the filter breaks linking by setting LinkLibraryDependencies to false
     links { "utils", "unrar", "libmupdf", "chm" }
-    links { "comctl32", "gdiplus", "msimg32", "shlwapi", "version" }
+    links { "comctl32", "gdiplus", "msimg32", "shlwapi", "version", "wininet" }
 
     project "PdfPreviewTest"
       kind "ConsoleApp"
@@ -878,7 +977,7 @@ workspace "SumatraPDF"
     filter {}
 
     -- for synctex
-    disablewarnings { "4100", "4244", "4267", "4702", "4706" }
+    disablewarnings { "4100", "4244", "4267", "4702", "4706", "4819" }
     uses_zlib()
     includedirs { "ext/synctex" }
 
@@ -898,7 +997,6 @@ workspace "SumatraPDF"
     linkoptions { "/DELAYLOAD:urlmon.dll /DELAYLOAD:version.dll /DELAYLOAD:wininet.dll" }
     linkoptions { "/DELAYLOAD:uiautomationcore.dll" }
     -- dependson { "PdfFilter", "PdfPreview", "test_util" }
-
 
   -- a dll version where most functionality is in libmupdf.dll
   project "SumatraPDF-dll"
@@ -935,6 +1033,8 @@ workspace "SumatraPDF"
 
     -- for uia
     disablewarnings { "4302", "4311", "4838" }
+
+    disablewarnings { "4819" }
 
     resdefines { "INSTALL_PAYLOAD_ZIP=.\\%{cfg.targetdir}\\InstallerData.dat" }
 

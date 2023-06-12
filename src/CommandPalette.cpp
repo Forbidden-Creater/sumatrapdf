@@ -73,6 +73,7 @@ static i32 gDocumentNotOpenWhitelist[] = {
     CmdContributeTranslation,
     CmdOptions,
     CmdAdvancedOptions,
+    CmdAdvancedSettings,
     CmdChangeLanguage,
     CmdCheckUpdate,
     CmdHelpOpenManualInBrowser,
@@ -89,6 +90,11 @@ static i32 gDocumentNotOpenWhitelist[] = {
     CmdShowLog,
     CmdClearHistory,
     CmdReopenLastClosedFile,
+    CmdCycleTheme,
+#if defined(DEBUG)
+    CmdDebugCrashMe,
+    CmdDebugCorruptMemory,
+#endif
 };
 
 // for those commands do not activate main window
@@ -186,6 +192,10 @@ CommandPaletteBuildCtx::~CommandPaletteBuildCtx() {
     delete annotationUnderCursor;
 }
 
+/* TODO:
+    CmdCloseOtherTabs
+    CmdCloseTabsToTheRight
+*/
 static bool AllowCommand(const CommandPaletteBuildCtx& ctx, i32 cmdId) {
     if (IsCmdInList(gBlacklistCommandsFromPalette)) {
         return false;
@@ -285,6 +295,7 @@ static bool AllowCommand(const CommandPaletteBuildCtx& ctx, i32 cmdId) {
         case CmdDebugTestApp:
         case CmdDebugShowNotif:
         case CmdDebugStartStressTest:
+        case CmdDebugCorruptMemory:
         case CmdDebugCrashMe: {
             return gIsDebugBuild;
         }
@@ -330,6 +341,11 @@ void CommandPaletteWnd::CollectStrings(MainWindow* win) {
             ctx.cursorOnComment = value && pageEl->Is(kindPageElementComment);
             ctx.cursorOnImage = pageEl->Is(kindPageElementImage);
         }
+    }
+
+    if (!HasPermission(Perm::DiskAccess)) {
+        ctx.supportsAnnots = false;
+        ctx.hasUnsavedAnnotations = false;
     }
 
     ctx.hasToc = win->ctrl && win->ctrl->HasToc();
@@ -572,7 +588,7 @@ void CommandPaletteWnd::ExecuteCurrentSelection() {
         if (str::Eq(s, converted)) {
             LoadArgs args(path, win);
             args.forceReuse = false; // open in a new tab
-            LoadDocument(&args);
+            LoadDocument(&args, false, false);
             ScheduleDelete();
             return;
         }

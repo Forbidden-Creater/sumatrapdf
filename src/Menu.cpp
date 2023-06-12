@@ -142,6 +142,22 @@ static MenuDef menuDefFile[] = {
     },
     //[ ACCESSKEY_ALTERNATIVE // PDF/XPS/CHM specific items are dynamically removed in RebuildFileMenu
     {
+        _TRN("Open Directory in &Explorer"),
+        CmdOpenWithExplorer,
+    },
+    {
+        _TRN("Open Directory in Directory &Opus"),
+        CmdOpenWithDirectoryOpus,
+    },
+    {
+        _TRN("Open Directory in &Total Commander"),
+        CmdOpenWithTotalCommander,
+    },
+    {
+        _TRN("Open Directory in &Double Commander"),
+        CmdOpenWithDoubleCommander,
+    },
+    {
         _TRN("Open in &Adobe Reader"),
         CmdOpenWithAcrobat,
     },
@@ -160,7 +176,7 @@ static MenuDef menuDefFile[] = {
     },
     //| ACCESSKEY_ALTERNATIVE
     {
-        _TRN("Open in &Microsoft HTML Help"),
+        _TRN("Open in Microsoft &HTML Help"),
         CmdOpenWithHtmlHelp,
     },
     //] ACCESSKEY_ALTERNATIVE
@@ -758,6 +774,10 @@ static MenuDef menuDefContextStart[] = {
         CmdOpenSelectedDocument,
     },
     {
+        _TRN("Show in folder"),
+        CmdShowInFolder,
+    },
+    {
         _TRN("&Pin Document"),
         CmdPinSelectedDocument,
     },
@@ -797,9 +817,6 @@ static UINT_PTR disableIfNoDocument[] = {
     CmdSelectAll,
     CmdProperties,
     CmdTogglePresentationMode,
-    CmdOpenWithAcrobat,
-    CmdOpenWithFoxIt,
-    CmdOpenWithPdfXchange,
     CmdRenameFile,
     CmdShowInFolder,
     // IDM_VIEW_WITH_XPS_VIEWER and IDM_VIEW_WITH_HTML_HELP
@@ -813,7 +830,7 @@ static UINT_PTR disableIfDirectoryOrBrokenPDF[] = {
     CmdOpenWithAcrobat,
     CmdOpenWithFoxIt,
     CmdOpenWithPdfXchange,
-    CmdShowInFolder,
+    CmdShowInFolder, // TODO: why?
 };
 
 UINT_PTR disableIfNoSelection[] = {
@@ -901,14 +918,10 @@ UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdSaveAs,
     CmdSaveAnnotations,
     CmdRenameFile,
-    CmdOpenWithAcrobat,
-    CmdOpenWithFoxIt,
-    CmdOpenWithPdfXchange,
-    CmdOpenWithXpsViewer,
-    CmdOpenWithHtmlHelp,
     CmdSendByEmail, // ???
     CmdContributeTranslation, // ???
     CmdAdvancedOptions,
+    CmdAdvancedSettings,
     CmdFavoriteAdd,
     CmdFavoriteDel,
     CmdFavoriteToggle,
@@ -1023,6 +1036,10 @@ static void AppendRecentFilesToMenu(HMENU m) {
             break;
         }
         const char* fp = fs->filePath;
+        if (!fp) {
+            // comes from settings file so can be missing due to user modifications
+            continue;
+        }
         AddFileMenuItem(m, fp, i);
     }
 
@@ -1236,6 +1253,9 @@ HMENU BuildMenuFromMenuDef(MenuDef* menuDef, HMENU menu, BuildMenuCtx* ctx) {
         }
         if (!HasPermission(Perm::DiskAccess)) {
             removeMenu |= cmdIdInList(removeIfNoDiskAccessPerm);
+            if (cmdId >= CmdOpenWithFirst && cmdId <= CmdOpenWithLast) {
+                removeMenu = true;
+            }
         }
         if (!HasPermission(Perm::CopySelection)) {
             removeMenu |= cmdIdInList(removeIfNoCopyPerms);
@@ -1460,6 +1480,9 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
     WindowTab* tab = win->CurrentTab();
 
     bool hasDocument = tab && tab->IsDocLoaded();
+    for (UINT_PTR id = CmdOpenWithFirst; id < CmdOpenWithLast; id++) {
+        MenuSetEnabled(win->menu, id, hasDocument);
+    }
     for (int id : disableIfNoDocument) {
         MenuSetEnabled(win->menu, id, hasDocument);
     }
@@ -1518,19 +1541,28 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
     MenuSetChecked(win->menu, CmdDebugShowLinks, gDebugShowLinks);
 }
 
+// TODO: not the best file for this
+void ShowFileInFolder(const char* path) {
+    if (!HasPermission(Perm::DiskAccess)) {
+        return;
+    }
+    const char* process = "explorer.exe";
+    TempStr args = str::FormatTemp("/select,\"%s\"", path);
+    CreateProcessHelper(process, args);
+}
+
 void OnAboutContextMenu(MainWindow* win, int x, int y) {
     if (!HasPermission(Perm::SavePreferences | Perm::DiskAccess) || !gGlobalPrefs->rememberOpenedFiles ||
         !gGlobalPrefs->showStartPage) {
         return;
     }
 
-    char* filePath = GetStaticLinkTemp(win->staticLinks, x, y, nullptr);
-    if (!filePath || *filePath == '<' || str::StartsWith(filePath, "http://") ||
-        str::StartsWith(filePath, "https://")) {
+    char* path = GetStaticLinkTemp(win->staticLinks, x, y, nullptr);
+    if (!path || *path == '<' || str::StartsWith(path, "http://") || str::StartsWith(path, "https://")) {
         return;
     }
 
-    FileState* fs = gFileHistory.Find(filePath, nullptr);
+    FileState* fs = gFileHistory.FindByPath(path);
     CrashIf(!fs);
     if (!fs) {
         return;
@@ -1546,8 +1578,13 @@ void OnAboutContextMenu(MainWindow* win, int x, int y) {
     DestroyMenu(popup);
 
     if (CmdOpenSelectedDocument == cmd) {
-        LoadArgs args(filePath, win);
-        LoadDocument(&args);
+        LoadArgs args(path, win);
+        LoadDocument(&args, false, !IsCtrlPressed());
+        return;
+    }
+
+    if (CmdShowInFolder == cmd) {
+        ShowFileInFolder(path);
         return;
     }
 
@@ -1862,7 +1899,7 @@ void FreeMenuOwnerDrawInfoData(HMENU hmenu) {
     };
 }
 void MarkMenuOwnerDraw(HMENU hmenu) {
-    if (!gOwnerDrawMenu) {
+    if (!currentTheme->colorizeControls) {
         return;
     }
     WCHAR buf[1024];
@@ -1987,8 +2024,8 @@ void MenuOwnerDrawnDrawItem(__unused HWND hwnd, DRAWITEMSTRUCT* dis) {
     HFONT font = GetMenuFont();
     auto prevFont = SelectObject(hdc, font);
 
-    COLORREF bgCol = GetAppColor(AppColor::MainWindowBg);
-    COLORREF txtCol = GetAppColor(AppColor::MainWindowText);
+    COLORREF bgCol = GetMainWindowBackgroundColor();
+    COLORREF txtCol = currentTheme->mainWindow.textColor;
 
     bool isSelected = bit::IsMaskSet(dis->itemState, (uint)ODS_SELECTED);
     if (isSelected) {

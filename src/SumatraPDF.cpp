@@ -82,6 +82,7 @@
 #include "SumatraConfig.h"
 #include "EditAnnotations.h"
 #include "CommandPalette.h"
+#include "Theme.h"
 
 #include "utils/Log.h"
 
@@ -105,7 +106,7 @@ bool gDebugShowLinks = false;
 bool gShowFrameRate = false;
 
 // if true, Enable lazyload session tabs on startup
-bool gEnableLazyLoad = false;
+bool gEnableLazyLoad = true;
 
 // in plugin mode, the window's frame isn't drawn and closing and
 // fullscreen are disabled, so that SumatraPDF can be displayed
@@ -400,14 +401,16 @@ MainWindow* FindMainWindowBySyncFile(const char* path, bool focusTab) {
         if (dm && dm->pdfSync && dm->pdfSync->SourceToDoc(path, 0, 0, &page, rects) != PDFSYNCERR_UNKNOWN_SOURCEFILE) {
             return win;
         }
-        if (focusTab && win->TabsCount() > 1) {
-            // bring a background tab to the foreground
-            for (WindowTab* tab : win->Tabs()) {
-                if (tab != win->CurrentTab() && tab->AsFixed() && tab->AsFixed()->pdfSync &&
-                    tab->AsFixed()->pdfSync->SourceToDoc(path, 0, 0, &page, rects) != PDFSYNCERR_UNKNOWN_SOURCEFILE) {
-                    TabsSelect(win, win->GetTabIdx(tab));
-                    return win;
-                }
+        bool bringFore = focusTab && win->TabCount() > 1;
+        if (!bringFore) {
+            continue;
+        }
+        // bring a background tab to the foreground
+        for (WindowTab* tab : win->Tabs()) {
+            if (tab != win->CurrentTab() && tab->AsFixed() && tab->AsFixed()->pdfSync &&
+                tab->AsFixed()->pdfSync->SourceToDoc(path, 0, 0, &page, rects) != PDFSYNCERR_UNKNOWN_SOURCEFILE) {
+                TabsSelect(win, win->GetTabIdx(tab));
+                return win;
             }
         }
     }
@@ -428,8 +431,8 @@ class HwndPasswordUI : public PasswordUI {
 /* Get password for a given 'fileName', can be nullptr if user cancelled the
    dialog box or if the encryption key has been filled in instead.
    Caller needs to free() the result. */
-char* HwndPasswordUI::GetPassword(const char* fileName, u8* fileDigest, u8 decryptionKeyOut[32], bool* saveKey) {
-    FileState* fileFromHistory = gFileHistory.Find(fileName, nullptr);
+char* HwndPasswordUI::GetPassword(const char* path, u8* fileDigest, u8 decryptionKeyOut[32], bool* saveKey) {
+    FileState* fileFromHistory = gFileHistory.FindByName(path, nullptr);
     if (fileFromHistory && fileFromHistory->decryptionKey) {
         AutoFreeStr fingerprint = str::MemToHex(fileDigest, 16);
         *saveKey = str::StartsWith(fileFromHistory->decryptionKey, fingerprint.Get());
@@ -455,10 +458,10 @@ char* HwndPasswordUI::GetPassword(const char* fileName, u8* fileDigest, u8 decry
     if (gPluginMode) {
         char* urlName = url::GetFileName(gPluginURL);
         if (urlName) {
-            fileName = urlName; // TODO: leaks
+            path = urlName; // TODO: leaks
         }
     }
-    fileName = path::GetBaseNameTemp(fileName);
+    path = path::GetBaseNameTemp(path);
 
     // check if the window is still valid as it might have been closed by now
     if (!IsWindow(hwnd)) {
@@ -469,7 +472,7 @@ char* HwndPasswordUI::GetPassword(const char* fileName, u8* fileDigest, u8 decry
     HwndToForeground(hwnd);
 
     bool* rememberPwd = gGlobalPrefs->rememberOpenedFiles ? saveKey : nullptr;
-    return Dialog_GetPassword(hwnd, fileName, rememberPwd);
+    return Dialog_GetPassword(hwnd, path, rememberPwd);
 }
 
 // update global windowState for next default launch when either
@@ -529,7 +532,7 @@ void UpdateTabFileDisplayStateForTab(WindowTab* tab) {
     // TODO: this is called multiple times for each tab
     RememberDefaultWindowPosition(win);
     char* fp = tab->filePath;
-    FileState* fs = gFileHistory.Find(fp, nullptr);
+    FileState* fs = gFileHistory.FindByName(fp, nullptr);
     if (!fs) {
         return;
     }
@@ -745,7 +748,7 @@ static void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
     win->ctrl->CreateThumbnail(Size(kThumbnailDx, kThumbnailDy), [=](RenderedBitmap* bmp) {
         uitask::Post([=] {
             if (bmp) {
-                SetThumbnail(gFileHistory.Find(filePath, nullptr), bmp);
+                SetThumbnail(gFileHistory.FindByPath(filePath), bmp);
             }
             str::Free(filePath);
         });
@@ -1026,7 +1029,6 @@ static void UpdateUiForCurrentTab(MainWindow* win) {
     HwndSetText(win->hwndFrame, win->CurrentTab()->frameTitle);
 
     // TODO: match either the toolbar (if shown) or background
-    UpdateTabsColors(win->tabsCtrl);
     HwndScheduleRepaint(win->tabsCtrl->hwnd); // TODO: was RepaintNow() ?
 
     bool onlyNumbers = !win->ctrl || !win->ctrl->HasPageLabels();
@@ -1064,7 +1066,7 @@ static void ReplaceDocumentInCurrentTab(LoadArgs* args, DocController* ctrl, Fil
     // (unless we're just refreshing the document, i.e. only if state && !state->useDefaultState)
     if (!fs && gGlobalPrefs->rememberStatePerDocument) {
         const char* fn = args->FilePath();
-        fs = gFileHistory.Find(fn, nullptr);
+        fs = gFileHistory.FindByPath(fn);
         if (fs) {
             if (fs->windowPos.IsEmpty()) {
                 fs->windowPos = gGlobalPrefs->windowPos;
@@ -1267,12 +1269,22 @@ void ReloadDocument(MainWindow* win, bool autoRefresh) {
     if (!tab || tab->editAnnotsWindow) {
         return;
     }
-    if (!win->IsDocLoaded()) {
+    // TODO: maybe should ensure it never is called for IsAboutTab() ?
+    // This only happens if gEnableLazyLoad is true
+    if (tab->IsAboutTab()) {
+        return;
+    }
+
+    if (!tab->IsDocLoaded()) {
         if (!autoRefresh) {
+            // TODO: seen a crash
+            if (str::IsEmpty(tab->filePath)) {
+                logf("tab->filePath is empty\n");
+            }
             LoadArgs args(tab->filePath, win);
             args.forceReuse = true;
             args.noSavePrefs = true;
-            LoadDocument(&args);
+            LoadDocument(&args, false, false);
         }
         return;
     }
@@ -1322,7 +1334,7 @@ void ReloadDocument(MainWindow* win, bool autoRefresh) {
 
     if (gGlobalPrefs->showStartPage) {
         // refresh the thumbnail for this file
-        FileState* state = gFileHistory.Find(fs->filePath, nullptr);
+        FileState* state = gFileHistory.FindByPath(fs->filePath);
         if (state) {
             CreateThumbnailForFile(win, state);
         }
@@ -1333,7 +1345,7 @@ void ReloadDocument(MainWindow* win, bool autoRefresh) {
         // we don't ask again at the next refresh
         AutoFreeStr decryptionKey = tab->AsFixed()->GetEngine()->GetDecryptionKey();
         if (decryptionKey) {
-            FileState* fs2 = gFileHistory.Find(fs->filePath, nullptr);
+            FileState* fs2 = gFileHistory.FindByName(fs->filePath, nullptr);
             if (fs2 && !str::Eq(fs2->decryptionKey, decryptionKey)) {
                 free(fs2->decryptionKey);
                 fs2->decryptionKey = decryptionKey.Release();
@@ -1440,6 +1452,7 @@ static MainWindow* CreateMainWindow() {
     if (!win->isMenuHidden) {
         SetMenu(win->hwndFrame, win->menu);
     }
+    win->brControlBgColor = CreateSolidBrush(currentTheme->mainWindow.controlBackgroundColor);
 
     ShowWindow(win->hwndCanvas, SW_SHOW);
     UpdateWindow(win->hwndCanvas);
@@ -1526,11 +1539,20 @@ void DeleteMainWindow(MainWindow* win) {
     delete win;
 }
 
+static void UpdateThemeForWindow(MainWindow* win) {
+    DeleteObject(win->brControlBgColor);
+    win->brControlBgColor = CreateSolidBrush(currentTheme->mainWindow.controlBackgroundColor);
+
+    UpdateTreeCtrlColors(win);
+    RebuildMenuBarForWindow(win);
+    RedrawWindow(win->hwndFrame, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+}
+
 static void RenameFileInHistory(const char* oldPath, const char* newPath) {
     if (path::IsSame(oldPath, newPath)) {
         return;
     }
-    FileState* fs = gFileHistory.Find(newPath, nullptr);
+    FileState* fs = gFileHistory.FindByPath(newPath);
     bool oldIsPinned = false;
     int oldOpenCount = 0;
     if (fs) {
@@ -1543,7 +1565,7 @@ static void RenameFileInHistory(const char* oldPath, const char* newPath) {
         }
         DeleteDisplayState(fs);
     }
-    fs = gFileHistory.Find(oldPath, nullptr);
+    fs = gFileHistory.FindByName(oldPath, nullptr);
     if (fs) {
         SetFileStatePath(fs, newPath);
         // merge Frequently Read data, so that a file
@@ -1588,11 +1610,14 @@ static void scheduleReloadTab(WindowTab* tab) {
     });
 }
 
+// return true if adjustd path
 static bool AdjustPathForMaybeMovedFile(LoadArgs* args) {
-    MainWindow* win = args->win;
     const char* path = args->FilePath();
-    bool failEarly = win && !args->forceReuse && !args->engine && !DocumentPathExists(path);
-    bool fileInHistory = gFileHistory.Find(path, nullptr) != nullptr;
+    if (DocumentPathExists(path)) {
+        return false;
+    }
+    bool failEarly = args->win && !args->forceReuse && !args->engine;
+    bool fileInHistory = gFileHistory.FindByPath(path) != nullptr;
     if (!failEarly || !fileInHistory) {
         return failEarly;
     }
@@ -1679,7 +1704,10 @@ MainWindow* LoadDocumentFinish(LoadArgs* args, bool lazyload) {
     }
     if (!args->forceReuse) {
         // insert a new tab for the loaded document
-        win->currentTabTemp = CreateNewTab(win, fullPath);
+        WindowTab* tab = new WindowTab(win);
+        tab->SetFilePath(fullPath);
+        win->currentTabTemp = AddTabToWindow(win, tab);
+
         // logf("LoadDocument: !forceReuse, created win->CurrentTab() at 0x%p\n", win->CurrentTab());
     } else {
         win->CurrentTab()->filePath.SetCopy(fullPath);
@@ -1786,13 +1814,21 @@ static MainWindow* MaybeCreateWindowForFileLoad(LoadArgs* args) {
     return win;
 }
 
-void LoadDocumentAsync(LoadArgs* argsIn) {
+void LoadDocumentAsync(LoadArgs* argsIn, bool activateExisting) {
     MainWindow* win = argsIn->win;
     bool failEarly = AdjustPathForMaybeMovedFile(argsIn);
     const char* path = argsIn->FilePath();
     if (failEarly) {
         ShowFileNotFound(win, path, argsIn->noSavePrefs);
         return;
+    }
+
+    if (activateExisting) {
+        MainWindow* existing = FindMainWindowByFile(path, true);
+        if (existing) {
+            existing->Focus();
+            return;
+        }
     }
 
     win = MaybeCreateWindowForFileLoad(argsIn);
@@ -1836,12 +1872,20 @@ void LoadDocumentAsync(LoadArgs* argsIn) {
 // open a file doesn't block next/prev file in
 static StrVec gFilesFailedToOpen;
 
-MainWindow* LoadDocument(LoadArgs* args, bool lazyload) {
+MainWindow* LoadDocument(LoadArgs* args, bool lazyload, bool activateExisting) {
     CrashAlwaysIf(gCrashOnOpen);
+
+    const char* path = args->FilePath();
+    if (activateExisting) {
+        MainWindow* existing = FindMainWindowByFile(path, true);
+        if (existing) {
+            existing->Focus();
+            return existing;
+        }
+    }
 
     MainWindow* win = args->win;
     bool failEarly = AdjustPathForMaybeMovedFile(args);
-    const char* path = args->FilePath();
 
     // fail fast if the file doesn't exist and there is a window the user
     // has just been interacting with
@@ -1887,8 +1931,8 @@ void LoadModelIntoTab(WindowTab* tab) {
     }
 
     MainWindow* win = tab->win;
-    if (gEnableLazyLoad && win->ctrl && !tab->ctrl) {
-        char* msg = str::Format(_TRA("Please wait - rendering..."));
+    if (gEnableLazyLoad && win->ctrl && !tab->ctrl && !tab->IsAboutTab()) {
+        char* msg = str::Format(_TRA("Please wait - loading..."));
         NotificationCreateArgs args;
         args.hwndParent = win->hwndCanvas;
         args.msg = msg;
@@ -1939,12 +1983,14 @@ void LoadModelIntoTab(WindowTab* tab) {
     }
 
     SetFocus(win->hwndFrame);
-    if (gEnableLazyLoad && !tab->ctrl) {
-        ReloadDocument(win, false);
-    } else {
-        if (tab->reloadOnFocus) {
-            tab->reloadOnFocus = false;
-            ReloadDocument(win, true);
+    if (!tab->IsAboutTab()) {
+        if (gEnableLazyLoad && !tab->ctrl) {
+            ReloadDocument(win, false);
+        } else {
+            if (tab->reloadOnFocus) {
+                tab->reloadOnFocus = false;
+                ReloadDocument(win, true);
+            }
         }
     }
     win->RedrawAll(true);
@@ -2046,7 +2092,7 @@ void MainWindowRerender(MainWindow* win, bool includeNonClientArea) {
     gRenderCache.CancelRendering(dm);
     gRenderCache.KeepForDisplayModel(dm, dm);
     if (includeNonClientArea) {
-        win->RedrawAllIncludingNonClient(true);
+        win->RedrawAllIncludingNonClient();
     } else {
         win->RedrawAll(true);
     }
@@ -2068,7 +2114,8 @@ static void RerenderFixedPage() {
 
 void UpdateDocumentColors() {
     COLORREF text, bg;
-    GetFixedPageUiColors(text, bg);
+    GetDocumentColors(text, bg);
+    logfa("retrieved doc colors in UpdateDocumentColors: 0x%x 0x%x\n", text, bg);
 
     if ((text == gRenderCache.textColor) && (bg == gRenderCache.backgroundColor)) {
         return; // colors didn't change
@@ -2181,7 +2228,7 @@ static void CloseDocumentInCurrentTab(MainWindow* win, bool keepUIEnabled, bool 
         ShowScrollBar(win->hwndCanvas, SB_BOTH, FALSE);
         win->RedrawAll();
         HwndSetText(win->hwndFrame, kSumatraWindowTitle);
-        CrashIf(win->TabsCount() != 0 || win->CurrentTab());
+        CrashIf(win->TabCount() != 0 || win->CurrentTab());
     }
 
     // Note: this causes https://code.google.com/p/sumatrapdf/issues/detail?id=2702. For whatever reason
@@ -2245,7 +2292,7 @@ bool SaveAnnotationsToMaybeNewPdfFile(WindowTab* tab) {
 
     LoadArgs args(newPath, win);
     args.forceReuse = true;
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 
     str::Str msg;
     msg.AppendFmt(_TRA("Saved annotations to '%s'"), newPath);
@@ -2386,46 +2433,6 @@ static bool MaybeSaveAnnotations(WindowTab* tab) {
     return true;
 }
 
-// Called when we're closing a document
-void TabsOnCloseDoc(WindowTab* tab) {
-    if (!tab) {
-        return;
-    }
-
-    /*
-    DisplayModel* dm = win->AsFixed();
-    if (dm) {
-        EngineBase* engine = dm->GetEngine();
-        if (EngineHasUnsavedAnnotations(engine)) {
-            // TODO: warn about unsaved annotations
-            logf("File has unsaved annotations\n");
-        }
-    }
-    */
-
-    RemoveAndDeleteTab(tab);
-    MainWindow* win = tab->win;
-    if (win->TabsCount() < 1) {
-        return;
-    }
-
-    WindowTab* curr = win->CurrentTab();
-    WindowTab* newCurrent = curr;
-    if (!curr || newCurrent == tab) {
-        // a current tab was closed so need to find new current tab
-        // TODO(tabs): why do I need win->tabSelectionHistory.Size() > 0
-        if (win->tabSelectionHistory->Size() > 0) {
-            newCurrent = win->tabSelectionHistory->Pop();
-        } else {
-            newCurrent = win->GetTab(0);
-        }
-    }
-    int idx = win->GetTabIdx(newCurrent);
-    win->tabsCtrl->SetSelected(idx);
-    tab = win->CurrentTab();
-    LoadModelIntoTab(tab);
-}
-
 // TODO: better name
 void CloseTab(WindowTab* tab, bool quitIfLast) {
     if (!tab) {
@@ -2446,7 +2453,7 @@ void CloseTab(WindowTab* tab, bool quitIfLast) {
     }
 
     bool didSavePrefs = false;
-    size_t tabCount = win->TabsCount();
+    size_t tabCount = win->TabCount();
     if (tabCount == 1 || (tabCount == 0 && quitIfLast)) {
         if (CanCloseWindow(win)) {
             CloseWindow(win, quitIfLast, false);
@@ -2454,8 +2461,24 @@ void CloseTab(WindowTab* tab, bool quitIfLast) {
         }
     } else {
         CrashIf(gPluginMode && !gWindows.Contains(win));
-        TabsOnCloseDoc(tab);
+        RemoveTab(tab);
+        delete tab;
     }
+
+    tabCount = win->TabCount();
+    if (tabCount == 1 && win->GetTab(0)->IsAboutTab()) {
+        // showing only home page tab so remove it
+        // if there are other windows, close this one
+        if (gWindows.size() > 1) {
+            CloseWindow(win, false, false);
+        } else {
+            tab = win->GetTab(0);
+            // re-use quitIfLast logic
+            CloseTab(tab, quitIfLast);
+            return;
+        }
+    }
+
     if (!didSavePrefs) {
         SaveSettings();
     }
@@ -2466,6 +2489,9 @@ void CloseTab(WindowTab* tab, bool quitIfLast) {
 // are other windows, else the Frequently Read page is displayed
 void CloseCurrentTab(MainWindow* win, bool quitIfLast) {
     WindowTab* tab = win->CurrentTab();
+    if (!tab) {
+        return;
+    }
     CloseTab(tab, quitIfLast);
 }
 
@@ -2829,14 +2855,11 @@ static void ShowCurrentFileInFolder(MainWindow* win) {
         return;
     }
     auto* ctrl = win->ctrl;
-    auto srcFileName = ctrl->GetFilePath();
-    if (!srcFileName) {
+    auto path = ctrl->GetFilePath();
+    if (!path) {
         return;
     }
-
-    const char* process = "explorer.exe";
-    AutoFreeStr args = str::Format("/select,\"%s\"", srcFileName);
-    CreateProcessHelper(process, args);
+    ShowFileInFolder(path);
 }
 
 static void RenameCurrentFile(MainWindow* win) {
@@ -2905,7 +2928,7 @@ static void RenameCurrentFile(MainWindow* win) {
         LogLastError();
         LoadArgs args(srcPath, win);
         args.forceReuse = true;
-        LoadDocument(&args);
+        LoadDocument(&args, false, false);
         NotificationCreateArgs nargs;
         nargs.hwndParent = win->hwndCanvas;
         nargs.msg = _TRA("Failed to rename the file!");
@@ -2920,7 +2943,7 @@ static void RenameCurrentFile(MainWindow* win) {
 
     LoadArgs args(newPath, win);
     args.forceReuse = true;
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 }
 
 static void CreateLnkShortcut(MainWindow* win) {
@@ -2986,8 +3009,8 @@ static void CreateLnkShortcut(MainWindow* win) {
     AutoFreeStr args = str::Format("\"%s\" -page %d -view \"%s\" -zoom %s -scroll %d,%d", ctrl->GetFilePath(), ss.page,
                                    viewMode, ZoomVirtual.Get(), (int)ss.x, (int)ss.y);
     AutoFreeStr label = ctrl->GetPageLabel(ss.page);
-    const char* srcFileName = path::GetBaseNameTemp(ctrl->GetFilePath());
-    AutoFreeStr desc = str::Format(_TRA("Bookmark shortcut to page %s of %s"), label.Get(), srcFileName);
+    const char* path = path::GetBaseNameTemp(ctrl->GetFilePath());
+    AutoFreeStr desc = str::Format(_TRA("Bookmark shortcut to page %s of %s"), label.Get(), path);
     auto exePath = GetExePathTemp();
     CreateShortcut(fileName, exePath, args, desc, 1);
 }
@@ -3026,8 +3049,8 @@ void DuplicateTabInNewWindow(WindowTab* tab) {
     if (!tab || tab->IsAboutTab()) {
         return;
     }
-    char* path = tab->filePath;
-    CrashIf(!path);
+    const char* path = tab->GetPath();
+    ReportIf(!path);
     if (!path) {
         return;
     }
@@ -3040,7 +3063,7 @@ void DuplicateTabInNewWindow(WindowTab* tab) {
     LoadArgs args(path, newWin);
     args.showWin = true;
     args.noPlaceWindow = true;
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 }
 
 // create a new window and load currently shown document into it
@@ -3100,7 +3123,7 @@ static void OpenFolder(MainWindow* win) {
     }
     LoadArgs args(dir, win);
     args.engine = engine;
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 }
 
 static void GetFilesFromGetOpenFileName(OPENFILENAMEW* ofn, StrVec& filesOut) {
@@ -3211,7 +3234,7 @@ static void OpenFile(MainWindow* win) {
     GetFilesFromGetOpenFileName(&ofn, files);
     for (char* path : files) {
         LoadArgs args(path, win);
-        LoadDocument(&args);
+        LoadDocument(&args, false, false);
     }
 }
 
@@ -3252,7 +3275,7 @@ static StrVec& CollectNextPrevFilesIfChanged(const char* path) {
         char* path2 = files[i];
         Kind kind = GuessFileTypeFromName(path2);
         bool isSupported = IsSupportedFileType(kind, true) || DocIsSupportedFileType(kind);
-        bool inHistory = gFileHistory.Find(path2, nullptr);
+        bool inHistory = gFileHistory.FindByPath(path2);
         if (isSupported || inHistory) {
             continue;
         }
@@ -3294,7 +3317,7 @@ static void OpenNextPrevFileInFolder(MainWindow* win, bool forward) {
     // we could automatically go to next file
     LoadArgs args(path, win);
     args.forceReuse = true;
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 }
 
 constexpr int kSplitterDx = 5;
@@ -4204,7 +4227,7 @@ static void FrameOnChar(MainWindow* win, WPARAM key, LPARAM info = 0) {
 static bool FrameOnSysChar(MainWindow* win, WPARAM key) {
     // use Alt+1 to Alt+8 for selecting the first 8 tabs and Alt+9 for the last tab
     if (win->tabsVisible && ('1' <= key && key <= '9')) {
-        TabsSelect(win, key < '9' ? (int)(key - '1') : (int)win->TabsCount() - 1);
+        TabsSelect(win, key < '9' ? (int)(key - '1') : (int)win->TabCount() - 1);
         return true;
     }
     // Alt + Space opens a sys menu
@@ -4532,7 +4555,7 @@ void ReopenLastClosedFile(MainWindow* win) {
         return;
     }
     LoadArgs args(path, win);
-    LoadDocument(&args);
+    LoadDocument(&args, false, false);
 }
 
 void ClearHistory(MainWindow* win) {
@@ -4604,6 +4627,20 @@ void ClearHistory(MainWindow* win) {
     */
 }
 
+// try to trigger a crash due to corrupting allocator
+// this is a different kind of a crash than just referencing invalid memory
+// as corrupted memory migh prevent crash handler from working
+// this can be used to test that crash handler still works
+// TODO: maybe corrupt some more
+void DebugCorruptMemory() {
+    char* s = (char*)malloc(23);
+    char* d = (char*)malloc(34);
+    free(s);
+    free(d);
+    // this triggers ntdll.dll!RtlReportCriticalFailure()
+    free(s);
+}
+
 static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     int wmId = LOWORD(wp);
 
@@ -4618,7 +4655,7 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         FileState* state = gFileHistory.Get(wmId - CmdFileHistoryFirst);
         if (state && HasPermission(Perm::DiskAccess)) {
             LoadArgs args(state->filePath, win);
-            LoadDocument(&args);
+            LoadDocument(&args, false, false);
         }
         return 0;
     }
@@ -4669,10 +4706,13 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
                 break;
             }
         }
-        ReportIf(!selectedSH);
+        if (!selectedSH || str::IsEmpty(selectedSH->url)) {
+            logf("FrameOnCommand: missing selectedSH for wmId %d\n", wmId);
+            return 0;
+        }
         WCHAR* url = ToWstrTemp(selectedSH->url);
         // try to auto-fix url
-        bool isValidURL = str::StartsWithI(url, L"http://") || str::StartsWithI(url, L"https://");
+        bool isValidURL = str::Find(url, L"://") != nullptr;
         if (!isValidURL) {
             url = str::JoinTemp(L"https://", url);
         }
@@ -4778,6 +4818,21 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         case CmdPrevTab:
             TabsOnCtrlTab(win, true);
             break;
+
+        case CmdCloseOtherTabs:
+        case CmdCloseTabsToTheRight: {
+            Vec<WindowTab*> toCloseOther;
+            Vec<WindowTab*> toCloseRight;
+            CollectTabsToClose(win, tab, toCloseOther, toCloseRight);
+            Vec<WindowTab*>& toClose = toCloseOther;
+            if (wmId == CmdCloseTabsToTheRight) {
+                toClose = toCloseRight;
+            }
+            for (WindowTab* t : toClose) {
+                CloseTab(t, false);
+            }
+            break;
+        }
 
         case CmdExit:
             OnMenuExit();
@@ -5100,6 +5155,7 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             break;
 
         case CmdAdvancedOptions:
+        case CmdAdvancedSettings:
             OpenAdvancedOptions();
             break;
 
@@ -5217,6 +5273,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         case CmdDebugCrashMe:
             CrashMe();
             break;
+
+        case CmdDebugCorruptMemory:
+            DebugCorruptMemory();
+            break;
 #endif
 
         case CmdFavoriteAdd:
@@ -5314,6 +5374,17 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             }
         } break;
 
+        case CmdCycleTheme:
+            CycleNextTheme();
+            for (auto mainWin : gWindows) {
+                // TODO: this only rerenders canvas, not frame, even with
+                // includingNonClientArea == true.
+                // MainWindowRerender(mainWin, true);
+                UpdateThemeForWindow(mainWin);
+            }
+            UpdateDocumentColors();
+            break;
+
         default:
             return DefWindowProc(hwnd, msg, wp, lp);
     }
@@ -5386,14 +5457,14 @@ LRESULT CALLBACK WndProcSumatraFrame(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             return FrameOnCommand(win, hwnd, msg, wp, lp);
 
         case WM_MEASUREITEM:
-            if (gOwnerDrawMenu) {
+            if (currentTheme->colorizeControls) {
                 MenuOwnerDrawnMesureItem(hwnd, (MEASUREITEMSTRUCT*)lp);
                 return TRUE;
             }
             break;
 
         case WM_DRAWITEM:
-            if (gOwnerDrawMenu) {
+            if (currentTheme->colorizeControls) {
                 MenuOwnerDrawnDrawItem(hwnd, (DRAWITEMSTRUCT*)lp);
                 return TRUE;
             }

@@ -88,7 +88,7 @@ struct MainWindow {
 
     WindowTab* currentTabTemp = nullptr; // points into tabs
     WindowTab* CurrentTab() const;
-    int TabsCount() const;
+    int TabCount() const;
     Vec<WindowTab*> Tabs() const;
     WindowTab* GetTab(int idx) const;
     int GetTabIdx(WindowTab*) const;
@@ -204,6 +204,7 @@ struct MainWindow {
     Point annotationBeingMovedOffset;
     HBITMAP bmpMovePattern = nullptr;
     HBRUSH brMovePattern = nullptr;
+    HBRUSH brControlBgColor = nullptr;
 
     DocControllerCallback* cbHandler = nullptr;
 
@@ -232,7 +233,7 @@ struct MainWindow {
     void UpdateCanvasSize();
     Size GetViewPortSize() const;
     void RedrawAll(bool update = false) const;
-    void RedrawAllIncludingNonClient(bool update = false) const;
+    void RedrawAllIncludingNonClient() const;
 
     void ChangePresentationMode(PresentationMode mode);
 

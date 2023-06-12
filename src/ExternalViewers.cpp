@@ -34,9 +34,45 @@ struct ExternalViewerInfo {
 
 static int gExternalViewersCount = 0;
 
+//
 // clang-format off
 static ExternalViewerInfo gExternalViewers[] = {
-    // it's no longer installed by default in win 10
+    {
+        "Explorer",
+        CmdOpenWithExplorer,
+        "*",
+        "explorer.exe",
+        R"("%d")",
+        nullptr,
+        nullptr,
+    },
+    {
+        "Directory Opus",
+        CmdOpenWithDirectoryOpus,
+        "*",
+        R"(GPSoftware\Directory Opus\dopus.exe)",
+        R"("%d")",
+        nullptr,
+        nullptr,
+    },
+    {
+        "Total Commander",
+        CmdOpenWithTotalCommander,
+        "*",
+        R"(totalcmd\TOTALCMD64.EXE)",
+        R"("%d")",
+        nullptr,
+        nullptr,
+    },
+    {
+        "Double Commander",
+        CmdOpenWithDoubleCommander,
+        "*",
+        R"(Double Commander\doublecmd.exe)",
+        R"(--no-splash --client "%d")",
+        nullptr,
+        nullptr,
+    },
     {
         "Acrobat Reader",
         CmdOpenWithAcrobat,
@@ -111,7 +147,7 @@ static ExternalViewerInfo gExternalViewers[] = {
         nullptr,
         kindEngineChm,
         nullptr
-    },
+    }
 };
 // clang-format on
 
@@ -146,7 +182,7 @@ static bool DetectExternalViewer(ExternalViewerInfo* ev) {
         return false;
     }
 
-    int csidls[] = {CSIDL_PROGRAM_FILES, CSIDL_PROGRAM_FILESX86, CSIDL_WINDOWS, CSIDL_SYSTEM};
+    static int csidls[] = {CSIDL_PROGRAM_FILES, CSIDL_PROGRAM_FILESX86, CSIDL_WINDOWS, CSIDL_SYSTEM};
     for (int csidl : csidls) {
         char* dir = GetSpecialFolderTemp(csidl);
         char* path = path::JoinTemp(dir, partialPath);
@@ -247,6 +283,10 @@ void DetectExternalViewers() {
     }
 }
 
+static bool filterMatchesEverything(const char* ext) {
+    return str::IsEmpty(ext) || str::Eq(ext, "*");
+}
+
 bool CanViewWithKnownExternalViewer(WindowTab* tab, int cmd) {
     if (!tab || !CanViewExternally(tab)) {
         return false;
@@ -256,11 +296,14 @@ bool CanViewWithKnownExternalViewer(WindowTab* tab, int cmd) {
         return false;
     }
     // must match file extension
-    const char* filePath = tab->filePath.Get();
-    char* ext = path::GetExtTemp(filePath);
-    const char* pos = str::FindI(ev->exts, ext);
-    if (!pos) {
-        return false;
+
+    if (!filterMatchesEverything(ev->exts)) {
+        const char* filePath = tab->filePath.Get();
+        char* ext = path::GetExtTemp(filePath);
+        const char* pos = str::FindI(ev->exts, ext);
+        if (!pos) {
+            return false;
+        }
     }
     Kind engineKind = tab->GetEngineType();
     if (engineKind != nullptr) {
@@ -278,30 +321,37 @@ bool CouldBePDFDoc(WindowTab* tab) {
     return !tab || !tab->ctrl || tab->GetEngineType() == kindEngineMupdf;
 }
 
-static char* FormatParams(const char* cmdLine, WindowTab* tab) {
-    // if the command line contains %p, it's replaced with the current page number
-    // if it contains %1, it's replaced with the file path (else the file path is appended)
-    AutoFreeStr params;
+// substitutions in cmdLine:
+//  %1 : file path (else the file path is appended)
+//  %d : directory in which file is
+//  %p : current page number
+static TempStr FormatParamsTemp(const char* cmdLine, WindowTab* tab) {
     if (cmdLine == nullptr) {
         cmdLine = R"("%1")";
     }
     if (str::Find(cmdLine, "%p")) {
-        AutoFreeStr pageNoStr(str::Format("%d", tab->ctrl ? tab->ctrl->CurrentPageNo() : 0));
-        params.Set(str::Replace(cmdLine, "%p", pageNoStr));
-        cmdLine = params;
+        int pageNo = tab->ctrl ? tab->ctrl->CurrentPageNo() : 0;
+        TempStr pageNoStr = str::FormatTemp("%d", pageNo);
+        cmdLine = str::ReplaceTemp(cmdLine, "%p", pageNoStr);
     }
+    bool appendPath = true;
     char* path = tab->filePath;
+    if (str::Find(cmdLine, "%d")) {
+        TempStr dir = path::GetDirTemp(path);
+        cmdLine = str::ReplaceTemp(cmdLine, "%d", dir);
+        appendPath = false;
+    }
     if (str::Find(cmdLine, R"("%1")")) {
         // "%1", is alrady quoted so no need to add quotes
-        params.Set(str::Replace(cmdLine, "%1", path));
+        cmdLine = str::ReplaceTemp(cmdLine, "%1", path);
     } else if (str::Find(cmdLine, R"(%1)")) {
         // %1, not quoted, need to add
         char* s = str::JoinTemp("\"", path, "\"");
-        params.Set(str::Replace(cmdLine, "%1", s));
-    } else {
-        params.Set(str::Format(R"(%s "%s")", cmdLine, path));
+        cmdLine = str::ReplaceTemp(cmdLine, "%1", s);
+    } else if (appendPath) {
+        cmdLine = str::FormatTemp(R"(%s "%s")", cmdLine, path);
     }
-    return params.StealData();
+    return (char*)cmdLine;
 }
 
 bool ViewWithKnownExternalViewer(WindowTab* tab, int cmd) {
@@ -314,16 +364,12 @@ bool ViewWithKnownExternalViewer(WindowTab* tab, int cmd) {
     if (ev->exeFullPath == nullptr) {
         return false;
     }
-    AutoFreeStr params = FormatParams(ev->launchArgs, tab);
+    TempStr params = FormatParamsTemp(ev->launchArgs, tab);
     return LaunchFile(ev->exeFullPath, params);
 }
 
 bool PathMatchFilter(const char* path, char* filter) {
-    // no filter means matches everything
-    if (str::IsEmpty(filter)) {
-        return true;
-    }
-    if (str::Eq(filter, "*")) {
+    if (filterMatchesEverything(filter)) {
         return true;
     }
     bool matches = path::Match(path, filter);
@@ -363,7 +409,7 @@ bool ViewWithExternalViewer(WindowTab* tab, size_t idx) {
         return false;
     }
     char* cmdLine = args.ParamsTemp();
-    AutoFreeStr params = FormatParams(cmdLine, tab);
+    TempStr params = FormatParamsTemp(cmdLine, tab);
     return LaunchFile(exePath, params);
 }
 

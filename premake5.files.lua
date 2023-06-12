@@ -8,23 +8,11 @@ function files_in_dir(dir, files_in_dir)
   files(paths)
 end
 
-function logview_files()
-  files_in_dir("src/utils", {
-    "BaseUtil.*",
-    "TempAllocator.*",
-    "StrFormat.*",
-    "StrUtil.*",
-    "StrconvUtil.*",
-  })
-  files {
-    "src/tools/logview.cpp",
-  }
-end
-
 function preview_test_files()
   files_in_dir("src/utils", {
     "BaseUtil.*",
     "TempAllocator.*",
+    "StrFormat.*",
     "StrUtil.*",
     "StrconvUtil.*",
   })
@@ -265,38 +253,7 @@ function libheif_files()
 
 end
 
-function dav1d_files()
-  files_in_dir("ext/dav1d/src", {
-    "lib.c",
-    "thread_task.c",
-    "cdf.c",
-    "cpu.c",
-    "data.c",
-    "decode.c",
-    "dequant_tables.c",
-    "getbits.c",
-    "intra_edge.c",
-    "itx_1d.c",
-    "lf_mask.c",
-    "log.c",
-    "mem.c",
-    "msac.c",
-    "obu.c",
-    "picture.c",
-    "qm.c",
-    "ref.c",
-    "refmvs.c",
-    "scan.c",
-    "tables.c",
-    "warpmv.c",
-    "wedge.c",
-    "win32/thread.c",
-
-    "sumatra_bitdepth_8.c",
-    "sumatra_bitdepth_8_2.c",
-    "sumatra_bitdepth_16.c",
-    "sumatra_bitdepth_16_2.c",
-  })
+function dav1d_x68_files()
   files_in_dir("ext/dav1d/src/x86", {
     "cpu.c",
     "msac_init.c",
@@ -348,6 +305,43 @@ function dav1d_files()
     "looprestoration16_sse.asm",
     "mc16_sse.asm",
   })
+end
+
+function dav1d_files()
+  files_in_dir("ext/dav1d/src", {
+    "lib.c",
+    "thread_task.c",
+    "cdf.c",
+    "cpu.c",
+    "data.c",
+    "decode.c",
+    "dequant_tables.c",
+    "getbits.c",
+    "intra_edge.c",
+    "itx_1d.c",
+    "lf_mask.c",
+    "log.c",
+    "mem.c",
+    "msac.c",
+    "obu.c",
+    "picture.c",
+    "qm.c",
+    "ref.c",
+    "refmvs.c",
+    "scan.c",
+    "tables.c",
+    "warpmv.c",
+    "wedge.c",
+    "win32/thread.c",
+  })
+
+  files_in_dir("ext/dav1d/src", {
+    "sumatra_bitdepth_8.c",
+    "sumatra_bitdepth_8_2.c",
+    "sumatra_bitdepth_16.c",
+    "sumatra_bitdepth_16_2.c",
+  })
+
   files("ext/dav1d/include/common/*.h")
   files("ext/dav1d/include/dav1d/*.h")
 end
@@ -360,6 +354,7 @@ function openjpeg_files()
     "dwt.c",
     "event.c",
     "function_list.c",
+    "ht_dec.c",
     "image.c",
     "invert.c",
     "j2k.c",
@@ -396,6 +391,7 @@ function extract_files()
     "extract.*",
     "html.*",
     "join.*",
+    "json.*",
     "mem.*",
     "memento.*",
     "odt_template.*",
@@ -452,10 +448,13 @@ function libjpeg_turbo_files()
     "jerror.c", "jfdctflt.c", "jfdctint.c", "jidctflt.c", "jidctfst.c",
     "jidctint.c", "jquant1.c", "jquant2.c", "jutils.c", "jmemmgr.c", "jmemnobs.c",
     "jaricom.c", "jdarith.c", "jfdctfst.c", "jdphuff.c", "jidctred.c",
+    "jcapimin.c", "jcapistd.c", "jcarith.c", "jccoefct.c", "jccolor.c",
+    "jcdctmgr.c", "jchuff.c", "jcinit.c", "jcmainct.c", "jcmarker.c",
+    "jcmaster.c", "jcparam.c", "jcprepct.c", "jcsample.c", "jcphuff.c"
   })
 
-  --to build non-assembly version, use this:
-  --files {"ext/libjpeg-turbo/jsimd_none.c"}
+  filter {'platforms:arm64'}
+    files {"ext/libjpeg-turbo/jsimd_none.c"}
 
   filter {'platforms:x32'}
     files_in_dir("ext/libjpeg-turbo/simd", {
@@ -481,7 +480,6 @@ function libjpeg_turbo_files()
     files {"ext/libjpeg-turbo/simd/jsimd_x86_64.c"}
 
   filter {}
-
 end
 
 function lcms2_files()
@@ -518,18 +516,18 @@ function harfbuzz_files()
     "hb-ot-metrics.cc",
     "hb-ot-name.cc",
     "hb-ot-shape.cc",
-    "hb-ot-shape-complex-arabic.cc",
-    "hb-ot-shape-complex-default.cc",
-    "hb-ot-shape-complex-hangul.cc",
-    "hb-ot-shape-complex-hebrew.cc",
-    "hb-ot-shape-complex-indic-table.cc",
-    "hb-ot-shape-complex-indic.cc",
-    "hb-ot-shape-complex-khmer.cc",
-    "hb-ot-shape-complex-myanmar.cc",
-    "hb-ot-shape-complex-syllabic.cc",
-    "hb-ot-shape-complex-thai.cc",
-    "hb-ot-shape-complex-use.cc",
-    "hb-ot-shape-complex-vowel-constraints.cc",
+    "hb-ot-shaper-arabic.cc",
+    "hb-ot-shaper-default.cc",
+    "hb-ot-shaper-hangul.cc",
+    "hb-ot-shaper-hebrew.cc",
+    "hb-ot-shaper-indic-table.cc",
+    "hb-ot-shaper-indic.cc",
+    "hb-ot-shaper-khmer.cc",
+    "hb-ot-shaper-myanmar.cc",
+    "hb-ot-shaper-syllabic.cc",
+    "hb-ot-shaper-thai.cc",
+    "hb-ot-shaper-use.cc",
+    "hb-ot-shaper-vowel-constraints.cc",
     "hb-ot-shape-fallback.cc",
     "hb-ot-shape-normalize.cc",
     "hb-ot-tag.cc",
@@ -556,6 +554,7 @@ function freetype_files()
     "ftbbox.c",
     "ftbitmap.c",
     "ftdebug.c",
+    "ftfstype.c",
     "ftgasp.c",
     "ftglyph.c",
     "ftinit.c",
@@ -627,6 +626,7 @@ function sumatrapdf_files()
     "SaveAsPdf.*",
     "SearchAndDDE.*",
     "Selection.*",
+    "Settings.h",
     "SettingsStructs.*",
     "SumatraPDF.cpp",
     "SumatraPDF.h",
@@ -795,24 +795,7 @@ function chm_files()
 end
 
 function mupdf_files()
-  --[[ files {
-    "mupdf/font_base14.asm",
-  }
-  --]]
-
   files { "ext/mupdf_load_system_font.c" }
-
-  filter {"platforms:x64 or x64_asan"}
-    files {
-      "mupdf/fonts_64.asm",
-    }
-  filter {}
-
-  filter {"platforms:x32"}
-    files {
-      "mupdf/fonts_32.asm",
-    }
-  filter {}
 
   files_in_dir("mupdf/source/cbz", {
     "mucbz.c",
@@ -899,6 +882,7 @@ function mupdf_files()
     "output.c",
     "output-cbz.c",
     "output-docx.c",
+    "output-jpeg.c",
     "output-pcl.c",
     "output-pclm.c",
     "output-pdfocr.c",
@@ -1102,6 +1086,12 @@ function efi_files()
   }
 end
 
+function sizer_files()
+  files {
+    "tools/sizer/*",
+  }
+end
+
 function test_util_files()
   files_in_dir( "src/utils", {
     "BaseUtil.*",
@@ -1287,5 +1277,11 @@ function gumbo_files()
   })
   files_in_dir("ext/gumbo-parser/include", {
     "*.h",
+  })
+end
+
+function bin2coff_files()
+  files_in_dir("tools", {
+    "bin2coff.c"
   })
 end

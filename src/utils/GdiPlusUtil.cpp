@@ -469,9 +469,18 @@ static bool GifSizeFromData(ByteReader r, Size& result) {
 
 static bool JpegSizeFromData(ByteReader r, Size& result) {
     // find the last start of frame marker for non-differential Huffman/arithmetic coding
-    size_t len = r.len;
-    for (size_t idx = 2; idx + 9 < len && r.Byte(idx) == 0xFF;) {
-        if (0xC0 <= r.Byte(idx + 1) && r.Byte(idx + 1) <= 0xC3 || 0xC9 <= r.Byte(idx + 1) && r.Byte(idx + 1) <= 0xCB) {
+    size_t n = r.len;
+    size_t idx = 2;
+    for (;;) {
+        if (idx + 9 >= n) {
+            return false;
+        }
+        u8 b = r.Byte(idx);
+        if (b != 0xff) {
+            return false;
+        }
+        b = r.Byte(idx + 1);
+        if (0xC0 <= b && b <= 0xC3 || 0xC9 <= b && b <= 0xCB) {
             result.dx = r.WordBE(idx + 7);
             result.dy = r.WordBE(idx + 5);
             return true;
@@ -558,8 +567,8 @@ static bool Jp2SizeFromData(ByteReader r, Size& result) {
             bool isIhdr = boxType2 == JP2_IHDR;
             idx += 8;
             if (isIhdr && boxLen2 <= (boxLen - 8)) {
-                result.dx = r.DWordBE(idx);
-                result.dy = r.DWordBE(idx + 4);
+                result.dy = r.DWordBE(idx);
+                result.dx = r.DWordBE(idx + 4);
                 if (result.dx > 64 * 1024 || result.dy > 64 * 1024) {
                     // sanity check, assuming that images that big can't
                     // possibly be valid

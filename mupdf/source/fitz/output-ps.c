@@ -237,7 +237,7 @@ ps_write_band(fz_context *ctx, fz_band_writer *writer_, int stride, int band_sta
 	if (required_input > SIZE_MAX / band_height)
 		fz_throw(ctx, FZ_ERROR_GENERIC, "png data too large.");
 	required_input *= band_height;
-	required_output = required_input >= UINT_MAX ? UINT_MAX : deflateBound(&writer->stream, required_input);
+	required_output = required_input >= UINT_MAX ? UINT_MAX : deflateBound(&writer->stream, (uLong)required_input);
 	if (required_output < required_input || required_output > UINT_MAX)
 		required_output = UINT_MAX;
 
@@ -276,13 +276,13 @@ ps_write_band(fz_context *ctx, fz_band_writer *writer_, int stride, int band_sta
 		size_t eaten;
 
 		writer->stream.next_in = o;
-		writer->stream.avail_in = remain <= UINT_MAX ? remain : UINT_MAX;
+		writer->stream.avail_in = (uInt)(remain <= UINT_MAX ? remain : UINT_MAX);
 		writer->stream.next_out = writer->output;
 		writer->stream.avail_out = writer->output_size <= UINT_MAX ? (uInt)writer->output_size : UINT_MAX;
 
 		err = deflate(&writer->stream, (finalband && remain == writer->stream.avail_in) ? Z_FINISH : Z_NO_FLUSH);
 		if (err != Z_OK && err != Z_STREAM_END)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "compression error %d", err);
+			fz_throw(ctx, FZ_ERROR_GENERIC, "compression error %d", err);
 
 		/* We are guaranteed that writer->stream.next_in will have been updated for the
 		 * data that has been eaten. */
@@ -293,7 +293,7 @@ ps_write_band(fz_context *ctx, fz_band_writer *writer_, int stride, int band_sta
 		/* We are guaranteed that writer->stream.next_out will have been updated for the
 		 * data that has been written. */
 		if (writer->stream.next_out != writer->output)
-	fz_write_data(ctx, out, writer->output, writer->output_size - writer->stream.avail_out);
+			fz_write_data(ctx, out, writer->output, writer->output_size - writer->stream.avail_out);
 
 		/* Zlib only guarantees to have finished when we have no more data to feed in, and
 		 * the last call to deflate did not return with avail_out == 0. (i.e. no more is

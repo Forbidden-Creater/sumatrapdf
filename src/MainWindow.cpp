@@ -41,6 +41,7 @@
 #include "StressTesting.h"
 #include "Translations.h"
 #include "uia/Provider.h"
+#include "Theme.h"
 
 #include "utils/Log.h"
 
@@ -117,7 +118,7 @@ void CreateMovePatternLazy(MainWindow* win) {
 MainWindow::~MainWindow() {
     FinishStressTest(this);
 
-    CrashIf(TabsCount() > 0);
+    CrashIf(TabCount() > 0);
     // CrashIf(ctrl); // TODO: seen in crash report
     CrashIf(linkOnLastButtonDown);
     CrashIf(annotationOnLastButtonDown);
@@ -126,6 +127,7 @@ MainWindow::~MainWindow() {
 
     DeleteObject(brMovePattern);
     DeleteObject(bmpMovePattern);
+    DeleteObject(brControlBgColor);
 
     // release our copy of UIA provider
     // the UI automation still might have a copy somewhere
@@ -196,7 +198,7 @@ WindowTab* MainWindow::CurrentTab() const {
         return curr;
     }
 #if 0
-    int nTabs = TabsCount();
+    int nTabs = TabCount();
     CrashIf(nTabs > 0);
     if (nTabs > 0) {
         curr = GetTab(0);
@@ -206,8 +208,8 @@ WindowTab* MainWindow::CurrentTab() const {
     return nullptr;
 }
 
-int MainWindow::TabsCount() const {
-    return tabsCtrl->GetTabCount();
+int MainWindow::TabCount() const {
+    return tabsCtrl->TabCount();
 }
 
 WindowTab* MainWindow::GetTab(int idx) const {
@@ -216,7 +218,7 @@ WindowTab* MainWindow::GetTab(int idx) const {
 }
 
 int MainWindow::GetTabIdx(WindowTab* tab) const {
-    int nTabs = tabsCtrl->GetTabCount();
+    int nTabs = tabsCtrl->TabCount();
     for (int i = 0; i < nTabs; i++) {
         WindowTab* t = GetTabsUserData<WindowTab*>(tabsCtrl, i);
         if (t == tab) {
@@ -228,7 +230,7 @@ int MainWindow::GetTabIdx(WindowTab* tab) const {
 
 Vec<WindowTab*> MainWindow::Tabs() const {
     Vec<WindowTab*> res;
-    int nTabs = tabsCtrl->GetTabCount();
+    int nTabs = tabsCtrl->TabCount();
     for (int i = 0; i < nTabs; i++) {
         WindowTab* tab = GetTabsUserData<WindowTab*>(tabsCtrl, i);
         res.Append(tab);
@@ -291,11 +293,9 @@ void MainWindow::RedrawAll(bool update) const {
     }
 }
 
-void MainWindow::RedrawAllIncludingNonClient(bool update) const {
+void MainWindow::RedrawAllIncludingNonClient() const {
     InvalidateRect(this->hwndCanvas, nullptr, false);
-    if (update) {
-        RedrawWindow(this->hwndCanvas, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
-    }
+    RedrawWindow(this->hwndCanvas, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
 }
 
 void MainWindow::ChangePresentationMode(PresentationMode mode) {
@@ -497,7 +497,7 @@ void LinkHandler::LaunchFile(const char* pathOrig, IPageDestination* link) {
     // TODO: don't show window until it's certain that there was no error
     if (!newWin) {
         LoadArgs args(fullPath, win);
-        newWin = LoadDocument(&args);
+        newWin = LoadDocument(&args, false, false);
         if (!newWin) {
             return;
         }
@@ -620,8 +620,10 @@ void LinkHandler::GotoNamedDest(const char* name) {
 void UpdateTreeCtrlColors(MainWindow* win) {
     COLORREF labelBgCol = GetSysColor(COLOR_BTNFACE);
     COLORREF labelTxtCol = GetSysColor(COLOR_BTNTEXT);
-    COLORREF treeBgCol = GetAppColor(AppColor::DocumentBg);
-    COLORREF treeTxtCol = GetAppColor(AppColor::DocumentText);
+    COLORREF treeBgCol, treeTxtCol;
+    GetDocumentColors(treeTxtCol, treeBgCol);
+    logfa("retrieved doc colors in tree control: 0x%x 0x%x\n", treeTxtCol, treeBgCol);
+
     COLORREF splitterCol = GetSysColor(COLOR_BTNFACE);
     bool flatTreeWnd = false;
 

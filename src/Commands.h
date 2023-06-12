@@ -98,6 +98,10 @@ Cmd* enum (e.g. CmdOpen) and a human-readable name (not used yet).
     V(CmdZoomFitPageAndSinglePage, "Zoom: Fit Page and Single Page")      \
     V(CmdContributeTranslation, "Contribute Translation")                 \
     V(CmdOpenWithFirst, "don't use")                                      \
+    V(CmdOpenWithExplorer, "Open Directory In Explorer")                  \
+    V(CmdOpenWithDirectoryOpus, "Open Directory In Directory Opus")       \
+    V(CmdOpenWithTotalCommander, "Open Directory In Total Commander")     \
+    V(CmdOpenWithDoubleCommander, "Open Directory In Double Commander")   \
     V(CmdOpenWithAcrobat, "Open With Adobe Acrobat")                      \
     V(CmdOpenWithFoxIt, "Open With FoxIt")                                \
     V(CmdOpenWithFoxItPhantom, "Open With FoxIt Phantom")                 \
@@ -117,6 +121,7 @@ Cmd* enum (e.g. CmdOpen) and a human-readable name (not used yet).
     V(CmdOpenAttachment, "Open Attachment")                               \
     V(CmdOptions, "Options...")                                           \
     V(CmdAdvancedOptions, "Advanced Options...")                          \
+    V(CmdAdvancedSettings, "Advanced Settings...")                        \
     V(CmdChangeLanguage, "Change Language...")                            \
     V(CmdCheckUpdate, "Check For Updates")                                \
     V(CmdHelpOpenManualInBrowser, "Help: Manual")                         \
@@ -128,6 +133,7 @@ Cmd* enum (e.g. CmdOpen) and a human-readable name (not used yet).
     V(CmdFavoriteToggle, "Toggle Favorites")                              \
     V(CmdDebugShowLinks, "Debug: Show Links")                             \
     V(CmdDebugCrashMe, "Debug: Crash Me")                                 \
+    V(CmdDebugCorruptMemory, "Debug: Corrupt Memory")                     \
     V(CmdDebugDownloadSymbols, "Debug: Download Symbols")                 \
     V(CmdDebugTestApp, "Debug: Test App")                                 \
     V(CmdDebugShowNotif, "Debug: Show Notification")                      \
@@ -165,6 +171,7 @@ Cmd* enum (e.g. CmdOpen) and a human-readable name (not used yet).
     V(CmdReopenLastClosedFile, "Reopen Last Closed")                      \
     V(CmdNextTab, "Next Tab")                                             \
     V(CmdPrevTab, "Previous Tab")                                         \
+    V(CmdCycleTheme, "Switch to next theme")                              \
     V(CmdNone, "Do nothing")
 
 // order of CreateAnnot* must be the same as enum AnnotationType

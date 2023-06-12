@@ -139,7 +139,8 @@ C++ wrapping:
                 fz_device *ll_fz_begin_page(fz_document_writer *wri, fz_rect mediabox);
             }
 
-        Environmental variabes control runtime diagnostics in generated code:
+        Environmental variables control runtime diagnostics in debug builds of
+        generated code:
 
             MUPDF_trace
                 If "1", generated code outputs a diagnostic each time it calls
@@ -621,6 +622,9 @@ Usage:
             rebuilds if commands change.
 
             args:
+                --clang-verbose
+                    Generate extra diagnostics in action=0 when looking for
+                    libclang.so.
                 -d <details>
                     If specified, we show extra diagnostics when wrapping
                     functions whose name contains <details>. Can be specified
@@ -636,6 +640,11 @@ Usage:
                     exists and its content differs from our generated content,
                     show diff and exit with an error. This can be used to check
                     for regressions when modifying this script.
+                --refcheck-if <text>
+                    Set text used to determine whether to enabling
+                    reference-checking code. For example use `--refcheck-if
+                    '#if 1'` to always enable, `--refcheck-if '#if 0'` to
+                    always disable. Default is '#ifndef NDEBUG'.
                 --python
                 --csharp
                     Whether to generated bindings for python or C#. Default is
@@ -727,13 +736,21 @@ Usage:
 
         -d
         --dir-so <directory>
-            Set directory containing shared libraries.
+            Set build directory.
 
             Default is: build/shared-release
 
             We use different C++ compile flags depending on release or debug
             builds (specifically, the definition of NDEBUG is important because
             it must match what was used when libmupdf.so was built).
+
+            If <directory> starts with `build/fpic-`, the C and C++ API are
+            built as `.a` archives but compiled with -fPIC so that they can be
+            linked into shared libraries.
+
+            If <directory> is '-' we do not set any paths when running tests
+            e.g. with --test-python. This is for testing after installing into
+            a venv.
 
             Examples:
                 -d build/shared-debug
@@ -747,7 +764,8 @@ Usage:
                 -d build/shared-release-x64-py3.9
 
         --doc <languages>
-            Generates documentation for the different APIs.
+            Generates documentation for the different APIs in
+            mupdf/docs/generated/.
 
             <languages> is either 'all' or a comma-separated list of API languages:
 
@@ -761,7 +779,7 @@ Usage:
                     Generate documentation for the Python API using pydoc3:
                         platform/python/mupdf.html
 
-            Also see '--sync -d' option for copying these generated
+            Also see '--sync-docs' option for copying these generated
             documentation files elsewhere.
 
         --ref
@@ -825,13 +843,11 @@ Usage:
                     * Imports mupdf and checks basic functionality.
                 * Deactivates the Python environment.
 
-        --venv <venv> ...
-            Runs mupdfwrap.py in a venv containing clang installed with 'pip
-            install libclang', passing remaining args. This seems to be the
-            only way to use clang from python on Windows.
+        --venv <venv-name> ...
+            Runs mupdfwrap.py in a venv called `venv` containing libclang,
+            passing remaining args.
 
-            E.g.:
-                --venv pylocal --swig-windows-auto -b all -t
+                --venv pylocal -b all
 
         --windows-cmd ...
             Runs mupdfwrap.py via cmd.exe, passing remaining args. Useful to
@@ -867,6 +883,8 @@ import pickle
 import re
 import shutil
 import sys
+import sysconfig
+import tempfile
 import textwrap
 
 try:
@@ -937,7 +955,7 @@ def compare_fz_usage(
                 '''
                 if type_.kind == clang.cindex.TypeKind.POINTER:
                     type_ = type_.get_pointee()
-                type_ = type_.get_canonical()
+                type_ = parse.get_name_canonical( type_)
                 if type_.spelling.startswith( 'struct fz_'):
                     return True
             # Set uses_structs to true if fn returns a fz struct or any
@@ -990,39 +1008,15 @@ def compare_fz_usage(
     jlib.log( '{n_missing}')
 
 
-def find_python( cpu, version=None):
+def windows_find_python_py( cpu=None, version=None):
     '''
-    Windows only. Finds installed Python with specific word size and version.
-
-    cpu:
-        A Cpu instance. If None, we use whatever we are running on.
-    version:
-        Two-digit Python version as a string such as '3.8'. If None we use
-        current Python's version.
-
-    Returns (path, version, root, cpu):
-
-        path:
-            Path of python binary.
-        version:
-            Version as a string, e.g. '3.9'. Same as <version> if not None,
-            otherwise the inferred version.
-        root:
-            The parent directory of <path>; allows
-            Python headers to be found, for example
-            <root>/include/Python.h.
-        cpu:
-            A Cpu instance, same as <cpu> if not None, otherwise the inferred
-            cpu.
-
-    We parse the output from 'py -0p' to find all available python
-    installations.
+    Windows only. Looks for python matching `cpu` and `version`, by parsing
+    output of `py -0p`.
     '''
-    assert state.state_.windows
     if cpu is None:
-        cpu = Cpu(cpu_name())
+        cpu = state.Cpu()
     if version is None:
-        version = python_version()
+        version = state.python_version()
     command = 'py -0p'
     jlib.log('Running: {command}')
     text = jlib.system(command, out='return')
@@ -1035,25 +1029,197 @@ def find_python( cpu, version=None):
         bits = int(m.group(2))
         if bits != cpu.bits or version2 != version:
             continue
-        path = m.group(5).strip()
-        root = path[ :path.rfind('\\')]
-        if not os.path.exists(path):
+        python = m.group(5).strip()
+        # We don't use os.path.dirname() here because it might fail if we are
+        # Cygwin python.
+        root = python[ :python.rfind('\\')]
+        if not os.path.exists(python):
             # Sometimes it seems that the specified .../python.exe does not exist,
             # and we have to change it to .../python<version>.exe.
             #
-            assert path.endswith('.exe'), f'path={path!r}'
-            path2 = f'{path[:-4]}{version}.exe'
-            jlib.log( 'Python {path!r} does not exist; changed to: {path2!r}')
-            assert os.path.exists( path2)
-            path = path2
+            assert python.endswith('.exe'), f'python={python!r}'
+            python2 = f'{python[:-4]}{version}.exe'
+            jlib.log( 'Python {python!r} does not exist; changed to: {python2!r}')
+            assert os.path.exists( python2)
+            python = python2
 
-        jlib.log('{cpu=} {version=}: returning {path=} {version=} {root=} {cpu=}')
-        return path, version, root, cpu
+        jlib.log('{cpu=} {version=}: have found: {python=} {version=} {root=} {cpu=}')
 
-    raise Exception( f'Failed to find python matching cpu={cpu}. Run "py -0p" to see available pythons')
+        # Need to run the Python we have found, to find its
+        # sysconfig.get_path('include').
+        #
+        command = f'{python} -c "import sysconfig; print( sysconfig.get_path(\'include\'))"'
+        include = jlib.system( command, out='return').strip()
+        jlib.log( 'for {python=}, sysconfig.get_path("include")) returned: {include!r}')
+
+        jlib.log( 'Returning {=cpu version python root include}')
+        return cpu, version, python, root, include
+
+    raise Exception( f'Failed to find python matching cpu={cpu} version={version}. Run "py -0p" to see available pythons')
+
+
+def windows_find_python( cpu=None, version=None):
+    '''
+    Windows only. Finds installed Python with specific word size and version.
+
+    cpu:
+        A Cpu instance. If None, we use whatever we are running on.
+    version:
+        Two-digit Python version as a string such as '3.8'. If None we use
+        current Python's version.
+
+    Returns (python, version, root, cpu, include):
+
+        python:
+            Path of python binary.
+        version:
+            Version as a string, e.g. '3.9'. Same as <version> if not None,
+            otherwise the inferred version.
+        root:
+            The parent directory of <python>; allows
+            Python headers to be found, for example
+            <root>/include/Python.h.
+        cpu:
+            A Cpu instance, same as <cpu> if not None, otherwise the inferred
+            cpu.
+        include:
+            Directory containing `Python.h`.
+
+    We look at current Python first; if that doesn't match, we use
+    windows_find_python_py() to parse the output from 'py -0p' to look at all
+    available python installations.
+    '''
+    assert state.state_.windows
+    if cpu is None:
+        cpu = state.Cpu()
+    if version is None:
+        version = state.python_version()
+    jlib.log( 'Looking for python matching {cpu=} {version=}')
+
+    current_cpu = state.Cpu()
+    current_version = f'{sys.version_info[0]}.{sys.version_info[1]}'
+    if cpu.name == current_cpu.name and version == current_version:
+        # Current python matches.
+        jlib.log( 'This invocation of Python matches {=cpu version}')
+        python = jlib.fs_find_in_paths( sys.executable)
+        root = os.path.dirname( python)
+        include = sysconfig.get_path('include')
+
+    else:
+        # Look for other installed python.
+        jlib.log( 'Current python {=current_cpu current_version} does not match {=cpu version}')
+        cpu, version, python, root, include = windows_find_python_py( cpu, version)
+
+    jlib.log( '{cpu=} {version=}. Returning:')
+    jlib.log( '    {python=}')
+    jlib.log( '    {root=}')
+    jlib.log( '    {include=}')
+    return cpu, version, python, root, include
 
 
 g_have_done_build_0 = False
+
+
+def _test_get_m_command():
+    '''
+    Tests _get_m_command().
+    '''
+    def test( dir_so, expected_command):
+        build_dirs = state.BuildDirs()
+        build_dirs.dir_so = dir_so
+        command, actual_build_dir = _get_m_command( build_dirs)
+        assert command == expected_command, f'\nExpected: {expected_command}\nBut:      {command}'
+
+    mupdf_root = os.path.abspath( f'{__file__}/../../../')
+    infix = 'CXX=clang++ ' if state.state_.openbsd else ''
+
+    test(
+            'shared-release',
+            f'cd {mupdf_root} && {infix}gmake HAVE_GLUT=no HAVE_PTHREAD=yes verbose=yes shared=yes build=release build_prefix=shared-',
+            )
+    test(
+            'mupdfpy-amd64-shared-release',
+            f'cd {mupdf_root} && {infix}gmake HAVE_GLUT=no HAVE_PTHREAD=yes verbose=yes shared=yes build=release build_prefix=mupdfpy-amd64-shared-',
+            )
+    test(
+            'mupdfpy-amd64-fpic-release',
+            f'cd {mupdf_root} && CFLAGS="-fPIC" {infix}gmake HAVE_GLUT=no HAVE_PTHREAD=yes verbose=yes build=release build_prefix=mupdfpy-amd64-fpic-',
+            )
+    jlib.log( '_get_m_command() ok')
+
+
+def _get_m_command( build_dirs):
+    '''
+    Generates a `make` command for building with `build_dirs.dir_mupdf`.
+
+    Returns `(command, actual_build_dir, suffix)`.
+    '''
+    assert not state.state_.windows, 'Cannot do "-b m" on Windows; C library is integrated into C++ library built by "-b 01"'
+    #jlib.log( '{build_dirs.dir_mupdf=}')
+    make = 'make'
+    if state.state_.openbsd:
+        # Need to run gmake, not make. Also for some
+        # reason gmake on OpenBSD sets CC to clang, but
+        # CXX to g++, so need to force CXX=clang++ too.
+        #
+        make = 'CXX=clang++ gmake'
+
+    flags = os.path.basename( build_dirs.dir_so).split('-')
+    actual_build_dir = f'{build_dirs.dir_mupdf}/build/'
+    make_env = ''
+    make_args = ' HAVE_GLUT=no HAVE_PTHREAD=yes verbose=yes'
+    suffix = None
+    build_prefix = ''
+    in_prefix = True
+    for i, flag in enumerate( flags):
+        if flag in ('x32', 'x64') or flag.startswith('py'):
+            # setup.py puts cpu and python version
+            # elements into the build directory name
+            # when creating wheels; we need to ignore
+            # them.
+            pass
+        else:
+            if 0: pass  # lgtm [py/unreachable-statement]
+            elif flag == 'debug':
+                make_args += ' build=debug'
+                in_prefix = False
+            elif flag == 'release':
+                make_args += ' build=release'
+                in_prefix = False
+            elif flag == 'memento':
+                make_args += ' build=memento'
+                in_prefix = False
+            elif flag == 'shared':
+                make_args += ' shared=yes'
+                if state.state_.macos:
+                    suffix = '.dylib'
+                else:
+                    suffix = '.so'
+                build_prefix += f'{flag}-'
+                in_prefix = False
+            else:
+                if not in_prefix:
+                    raise Exception( f'Unrecognised flag {flag!r} in {flags!r} in {build_dirs.dir_so!r}')
+                if flag == 'fpic':
+                    make_env += ' CFLAGS="-fPIC"'
+                    suffix = '.a'
+                else:
+                    #jlib.log(f'Ignoring unrecognised flag {flag!r} in {flags!r} in {build_dirs.dir_so!r}')
+                    pass
+                build_prefix += f'{flag}-'
+            if i:
+                actual_build_dir += '-'
+            actual_build_dir += flag
+    assert suffix, f'Leaf must contain "shared-" or "fpic-": build_dirs.dir_so={build_dirs.dir_so}'
+    if build_prefix:
+        make_args += f' build_prefix={build_prefix}'
+    command = f'cd {build_dirs.dir_mupdf} &&'
+    if make_env:
+        command += make_env
+    command += f' {make}{make_args}'
+
+    return command, actual_build_dir, suffix
+
 
 def build( build_dirs, swig_command, args):
     '''
@@ -1076,9 +1242,11 @@ def build( build_dirs, swig_command, args):
     build_python = True
     build_csharp = False
     check_regress = False
-
+    clang_info_verbose = False
     force_rebuild = False
     header_git = False
+    refcheck_if = '#ifndef NDEBUG'
+
     state.state_.show_details = lambda name: False
     devenv = 'devenv.com'
     if state.state_.windows:
@@ -1093,7 +1261,7 @@ def build( build_dirs, swig_command, args):
                 devenv = path
                 break
 
-    jlib.log('{build_dirs.dir_so=}')
+    #jlib.log('{build_dirs.dir_so=}')
     details = list()
 
     while 1:
@@ -1102,6 +1270,8 @@ def build( build_dirs, swig_command, args):
             pass
         elif actions == '-f':
             force_rebuild = True
+        elif actions == '--clang-verbose':
+            clang_info_verbose = True
         elif actions == '-d':
             d = args.next()
             details.append( d)
@@ -1124,6 +1294,9 @@ def build( build_dirs, swig_command, args):
             build_csharp = True
         elif actions == '--regress':
             check_regress = True
+        elif actions == '--refcheck-if':
+            refcheck_if = args.next()
+            jlib.log( 'Have set {refcheck_if=}')
         elif actions.startswith( '-'):
             raise Exception( f'Unrecognised --build flag: {actions}')
         else:
@@ -1131,6 +1304,16 @@ def build( build_dirs, swig_command, args):
 
     if actions == 'all':
         actions = '0123' if state.state_.windows else 'm0123'
+
+    dir_so_flags = os.path.basename( build_dirs.dir_so).split( '-')
+
+    if state.state_.windows:
+        if 'debug' in dir_so_flags:
+            windows_build_type = 'Debug'
+        elif 'release' in dir_so_flags:
+            windows_build_type = 'Release'
+        else:
+            assert 0, f'Expecting "-release-" or "-debug-" in build_dirs.dir_so={build_dirs.dir_so}'
 
     for action in actions:
         with jlib.LogPrefixScope( f'{action}: '):
@@ -1142,42 +1325,7 @@ def build( build_dirs, swig_command, args):
             elif action == 'm':
                 # Build libmupdf.so.
                 jlib.log( 'Building libmupdf.so ...')
-                assert not state.state_.windows, 'Cannot do "-b m" on Windows; C library is integrated into C++ library built by "-b 01"'
-                jlib.log( '{build_dirs.dir_mupdf=}')
-                make = 'make'
-                if state.state_.openbsd:
-                    # Need to run gmake, not make. Also for some
-                    # reason gmake on OpenBSD sets CC to clang, but
-                    # CXX to g++, so need to force CXX=clang++ too.
-                    #
-                    make = 'CXX=clang++ gmake'
-
-                command = f'cd {build_dirs.dir_mupdf} && {make} HAVE_GLUT=no HAVE_PTHREAD=yes shared=yes verbose=yes'
-                #command += ' USE_SYSTEM_FREETYPE=yes USE_SYSTEM_ZLIB=yes'
-                prefix = f'{build_dirs.dir_mupdf}/build/shared-'
-                assert build_dirs.dir_so.startswith(prefix), f'build_dirs.dir_so={build_dirs.dir_so} prefix={prefix}'
-                flags = build_dirs.dir_so[ len(prefix): ]
-                assert not flags.endswith('/')
-                #if flags.endswith('/'):    flags = flags[:-1]
-                flags = flags.split('-')
-                assert prefix.endswith('-')
-                actual_build_dir = prefix[:-1]
-                for flag in flags:
-                    if flag in ('x32', 'x64') or flag.startswith('py'):
-                        # setup.py puts cpu and python version
-                        # elements into the build directory name
-                        # when creating wheels; we need to ignore
-                        # them.
-                        pass
-                    else:
-                        if 0: pass  # lgtm [py/unreachable-statement]
-                        elif flag == 'debug':   command += ' build=debug'
-                        elif flag == 'release': command += ' build=release'
-                        elif flag == 'memento': command += ' build=memento'
-                        else:
-                            raise Exception(f'Unrecognised flag {flag!r} in {flags!r} in {build_dirs.dir_so!r}')
-                        actual_build_dir += f'-{flag}'
-
+                command, actual_build_dir, suffix = _get_m_command( build_dirs)
                 jlib.system( command, prefix=jlib.log_text(), out='log', verbose=1)
 
                 if actual_build_dir != build_dirs.dir_so:
@@ -1189,7 +1337,7 @@ def build( build_dirs, swig_command, args):
                     # build/shared-release/libmupdf.so, so we need
                     # to copy into build/shared-release-x64-py3.8/.
                     #
-                    jlib.copy( f'{actual_build_dir}/libmupdf.so', f'{build_dirs.dir_so}/libmupdf.so', verbose=1)
+                    jlib.copy( f'{actual_build_dir}/libmupdf{suffix}', f'{build_dirs.dir_so}/libmupdf{suffix}', verbose=1)
 
             elif action == '0':
                 # Generate C++ code that wraps the fz_* API.
@@ -1212,6 +1360,8 @@ def build( build_dirs, swig_command, args):
                             header_git,
                             generated,
                             check_regress,
+                            clang_info_verbose,
+                            refcheck_if,
                             )
 
                     #generated.functions = state.state_.functions_cache
@@ -1279,49 +1429,113 @@ def build( build_dirs, swig_command, args):
                             f'cd {build_dirs.dir_mupdf}&&'
                             f'"{devenv}"'
                             f' platform/win32/mupdf.sln'
-                            f' /Build "ReleasePython|{build_dirs.cpu.windows_config}"'
+                            f' /Build "{windows_build_type}Python|{build_dirs.cpu.windows_config}"'
                             f' /Project mupdfcpp'
                             )
                     jlib.system(command, verbose=1, out='log')
 
                     jlib.copy(
-                            f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}Release/mupdfcpp{build_dirs.cpu.windows_suffix}.dll',
+                            f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}{windows_build_type}/mupdfcpp{build_dirs.cpu.windows_suffix}.dll',
                             f'{build_dirs.dir_so}/',
                             verbose=1,
                             )
 
                 else:
                     jlib.log( 'Compiling generated C++ source code to create libmupdfcpp.so ...')
-                    out_so = f'{build_dirs.dir_mupdf}/platform/c++/libmupdfcpp.so'
-                    if build_dirs.dir_so:
-                        out_so = f'{build_dirs.dir_so}/libmupdfcpp.so'
-
-                    mupdf_so = f'{build_dirs.dir_so}/libmupdf.so'
-
                     include1 = f'{build_dirs.dir_mupdf}/include'
                     include2 = f'{build_dirs.dir_mupdf}/platform/c++/include'
                     cpp_files_text = ''
                     for i in cpp_files:
                         cpp_files_text += ' ' + os.path.relpath(i)
-                    command = ( textwrap.dedent(
-                            f'''
-                            c++
-                                -o {out_so}
-                                {build_dirs.cpp_flags}
-                                -fPIC
-                                -shared
-                                -I {include1}
-                                -I {include2}
-                                {cpp_files_text}
-                                {jlib.link_l_flags(mupdf_so)}
-                            ''').strip().replace( '\n', ' \\\n')
-                            )
-                    jlib.build(
-                            [include1, include2] + cpp_files,
-                            [out_so],
-                            command,
-                            force_rebuild,
-                            )
+                    if 'shared' in dir_so_flags:
+                        libmupdfcpp = f'{build_dirs.dir_so}/libmupdfcpp.so'
+                        libmupdf = f'{build_dirs.dir_so}/libmupdf.so'
+                        command = ( textwrap.dedent(
+                                f'''
+                                c++
+                                    -o {libmupdfcpp}
+                                    {build_dirs.cpp_flags}
+                                    -fPIC -shared
+                                    -I {include1}
+                                    -I {include2}
+                                    {cpp_files_text}
+                                    {jlib.link_l_flags(libmupdf)}
+                                ''').strip().replace( '\n', ' \\\n')
+                                )
+                        jlib.build(
+                                [include1, include2] + cpp_files,
+                                libmupdfcpp,
+                                command,
+                                force_rebuild,
+                                )
+                    elif 'fpic' in dir_so_flags:
+                        # We build a .so containing the C and C++ API. This
+                        # might be slightly faster than having separate C and
+                        # C++ API .so files, but probably makes no difference.
+                        #
+                        libmupdfcpp = f'{build_dirs.dir_so}/libmupdfcpp.a'
+                        libmupdf = []#[ f'{build_dirs.dir_so}/libmupdf.a', f'{build_dirs.dir_so}/libmupdf-third.a']
+
+                        # Compile each .cpp file.
+                        ofiles = []
+                        for cpp_file in cpp_files:
+                            ofile = f'{build_dirs.dir_so}/{os.path.basename(cpp_file)}.o'
+                            ofiles.append( ofile)
+                            command = ( textwrap.dedent(
+                                    f'''
+                                    c++
+                                        {build_dirs.cpp_flags}
+                                        -fPIC
+                                        -c
+                                        -I {include1}
+                                        -I {include2}
+                                        -o {ofile}
+                                        {cpp_file}
+                                    ''').strip().replace( '\n', ' \\\n')
+                                    )
+                            jlib.build(
+                                    [include1, include2, cpp_file],
+                                    ofile,
+                                    command,
+                                    force_rebuild,
+                                    verbose=True,
+                                    )
+
+                        # Create libmupdfcpp.a containing all .cpp.o files.
+                        if 0:
+                            libmupdfcpp_a = f'{build_dirs.dir_so}/libmupdfcpp.a'
+                            command = f'ar cr {libmupdfcpp_a} {" ".join(ofiles)}'
+                            jlib.build(
+                                    ofiles,
+                                    libmupdfcpp_a,
+                                    command,
+                                    force_rebuild,
+                                    verbose=True,
+                                    )
+
+                        # Create libmupdfcpp.so from all .cpp and .c files.
+                        libmupdfcpp_so = f'{build_dirs.dir_so}/libmupdfcpp.so'
+                        alibs = [
+                                f'{build_dirs.dir_so}/libmupdf.a',
+                                f'{build_dirs.dir_so}/libmupdf-third.a'
+                                ]
+                        command = textwrap.dedent( f'''
+                                c++
+                                    {build_dirs.cpp_flags}
+                                    -fPIC -shared
+                                    -o {libmupdfcpp_so}
+                                    {' '.join(ofiles)}
+                                    {' '.join(alibs)}
+                                ''').strip().replace( '\n', ' \\\n')
+                        jlib.build(
+                                ofiles + alibs,
+                                libmupdfcpp_so,
+                                command,
+                                force_rebuild,
+                                verbose=True,
+                                )
+                    else:
+                        assert 0, f'Leaf must start with "shared-" or "fpic-": build_dirs.dir_so={build_dirs.dir_so}'
 
             elif action == '2':
                 # Use SWIG to generate source code for python/C# bindings.
@@ -1379,16 +1593,27 @@ def build( build_dirs, swig_command, args):
 
                 if state.state_.windows:
                     if build_python:
-                        python_path, python_version, python_root, cpu = find_python(
+                        cpu, python_version, python_path, python_root, include = windows_find_python(
                                 build_dirs.cpu,
                                 build_dirs.python_version,
                                 )
-                        jlib.log( 'best python for {build_dirs.cpu=}: {python_path=} {python_version=}')
-
-                        py_root = python_root.replace('\\', '/')
+                        jlib.log( '{include=}:')
+                        if 0:
+                            # Show contents of include directory.
+                            for dirpath, dirnames, filenames in os.walk( include):
+                                for f in filenames:
+                                    p = os.path.join( dirpath, f)
+                                    jlib.log( '    {p!r}')
+                        assert os.path.isfile( os.path.join( include, 'Python.h'))
+                        python_root = python_root.replace('\\', '/')
+                        # Oddly there doesn't seem to be a
+                        # `sysconfig.get_path('libs')`, but it seems to be next
+                        # to `includes`:
+                        libs = os.path.abspath( f'{include}/../libs')
+                        jlib.log( 'Matching python for {build_dirs.cpu=} {python_version=}: {python_path=} {include=} {python_root=} {include=} {libs=}')
                         env_extra = {
-                                'MUPDF_PYTHON_INCLUDE_PATH': f'{py_root}/include',
-                                'MUPDF_PYTHON_LIBRARY_PATH': f'{py_root}/libs',
+                                'MUPDF_PYTHON_INCLUDE_PATH': f'{include}',
+                                'MUPDF_PYTHON_LIBRARY_PATH': f'{libs}',
                                 }
                         jlib.log('{env_extra=}')
 
@@ -1415,13 +1640,13 @@ def build( build_dirs, swig_command, args):
                                 f'cd {build_dirs.dir_mupdf}&&'
                                 f'"{devenv}"'
                                 f' platform/win32/mupdfpyswig.sln'
-                                f' /Build "ReleasePython|{build_dirs.cpu.windows_config}"'
+                                f' /Build "{windows_build_type}Python|{build_dirs.cpu.windows_config}"'
                                 f' /Project mupdfpyswig'
                                 )
                         jlib.system(command, verbose=1, out='log', env_extra=env_extra)
 
                         jlib.copy(
-                                f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}Release/mupdfpyswig.dll',
+                                f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}{windows_build_type}/mupdfpyswig.dll',
                                 f'{build_dirs.dir_so}/_mupdf.pyd',
                                 verbose=1,
                                 )
@@ -1430,7 +1655,7 @@ def build( build_dirs, swig_command, args):
                         # The swig-generated .cpp file must exist at
                         # this point.
                         #
-                        cpp_path = 'platform/csharp/mupdfcpp_swig.cpp'
+                        cpp_path = f'{build_dirs.dir_mupdf}/platform/csharp/mupdfcpp_swig.cpp'
                         assert os.path.exists(cpp_path), f'SWIG-generated file does not exist: {cpp_path}'
 
                         jlib.log('Building mupdfcsharp project')
@@ -1444,7 +1669,7 @@ def build( build_dirs, swig_command, args):
                         jlib.system(command, verbose=1, out='log')
 
                         jlib.copy(
-                                f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}Release/mupdfcsharpswig.dll',
+                                f'{build_dirs.dir_mupdf}/platform/win32/{build_dirs.cpu.windows_subdir}{windows_build_type}/mupdfcsharpswig.dll',
                                 f'{build_dirs.dir_so}/mupdfcsharp.dll',
                                 verbose=1,
                                 )
@@ -1493,8 +1718,17 @@ def build( build_dirs, swig_command, args):
                     include1        = f'{build_dirs.dir_mupdf}/include'
                     include2        = f'{build_dirs.dir_mupdf}/platform/c++/include'
 
-                    mupdf_so        = f'{build_dirs.dir_so}/libmupdf.so'
-                    mupdfcpp_so     = f'{build_dirs.dir_so}/libmupdfcpp.so'
+                    dir_so_flags = os.path.basename( build_dirs.dir_so).split( '-')
+                    if 'shared' in dir_so_flags:
+                        libmupdf        = f'{build_dirs.dir_so}/libmupdf.so'
+                        libmupdfthird   = f''
+                        libmupdfcpp     = f'{build_dirs.dir_so}/libmupdfcpp.so'
+                    elif 'fpic' in dir_so_flags:
+                        libmupdf        = f'{build_dirs.dir_so}/libmupdf.a'
+                        libmupdfthird   = f'{build_dirs.dir_so}/libmupdf-third.a'
+                        libmupdfcpp     = f'{build_dirs.dir_so}/libmupdfcpp.a'
+                    else:
+                        assert 0, f'Leaf must start with "shared-" or "fpic-": build_dirs.dir_so={build_dirs.dir_so}'
 
                     if build_python:
                         cpp_path = f'{build_dirs.dir_mupdf}/platform/python/mupdfcpp_swig.cpp'
@@ -1507,7 +1741,7 @@ def build( build_dirs, swig_command, args):
                         # clang needs around 2G on OpenBSD.
                         #
                         soft, hard = resource.getrlimit( resource.RLIMIT_DATA)
-                        required = 2 * 2**30
+                        required = 3 * 2**30
                         if soft < required:
                             if hard < required:
                                 jlib.log( 'Warning: RLIMIT_DATA {hard=} is less than {required=}.')
@@ -1540,16 +1774,16 @@ def build( build_dirs, swig_command, args):
                                         -I {include2}
                                         {include3}
                                         {cpp2_path}
-                                        {jlib.link_l_flags( [mupdf_so, mupdfcpp_so])}
+                                        {jlib.link_l_flags( [libmupdf, libmupdfcpp])}
                                         -Wno-deprecated-declarations
-                                    ''').strip().replace( '\n', ' \\\n').strip()
+                                    ''').strip().replace( '\n', ' \\\n')
                             )
                             infiles = [
                                     cpp2_path,
                                     include1,
                                     include2,
-                                    mupdf_so,
-                                    mupdfcpp_so,
+                                    libmupdf,
+                                    libmupdfcpp,
                                     ]
                             jlib.build(
                                     infiles,
@@ -1561,29 +1795,34 @@ def build( build_dirs, swig_command, args):
                             jlib.remove( out2_so)
                             jlib.remove( f'{out2_so}.cmd')
 
+                    # Build _mupdf.so.
                     command = ( textwrap.dedent(
                             f'''
                             c++
                                 -o {out_so}
                                 {build_dirs.cpp_flags}
                                 -fPIC
-                                --shared
+                                -shared
                                 -I {include1}
                                 -I {include2}
                                 {include3}
                                 {cpp_path}
-                                {jlib.link_l_flags( [mupdf_so, mupdfcpp_so])}
                                 -Wno-deprecated-declarations
-
-                            ''').strip().replace( '\n', ' \\\n').strip()
+                                -Wno-free-nonheap-object
+                            ''').strip().replace( '\n', ' \\\n')
                             )
+                    sos = []
+                    sos.append( f'{build_dirs.dir_so}/libmupdfcpp.so')
+                    if os.path.basename( build_dirs.dir_so).startswith( 'shared-'):
+                        sos.append( f'{build_dirs.dir_so}/libmupdf.so')
+                    command += f' \\\n   {jlib.link_l_flags( sos)}'
                     infiles = [
                             cpp_path,
                             include1,
                             include2,
-                            mupdf_so,
-                            mupdfcpp_so,
+                            libmupdf,
                             ]
+                    infiles += sos
 
                     jlib.build(
                             infiles,
@@ -1598,35 +1837,35 @@ def build( build_dirs, swig_command, args):
 def python_settings(build_dirs, startdir=None):
     # We need to set LD_LIBRARY_PATH and PYTHONPATH so that our
     # test .py programme can load mupdf.py and _mupdf.so.
+    if build_dirs.dir_so is None:
+        # Use no extra environment and default python, e.g. in venv.
+        jlib.log('build_dirs.dir_so is None, returning empty extra environment and "python"')
+        return {}, 'python'
+
     env_extra = {}
+    env_extra[ 'PYTHONPATH'] = os.path.relpath(build_dirs.dir_so, startdir)
+
     command_prefix = ''
-    #log('{build_dirs=}')
     if state.state_.windows:
         # On Windows, it seems that 'py' runs the default
         # python. Also, Windows appears to be able to find
         # _mupdf.pyd in same directory as mupdf.py.
         #
-        python_path, python_version, python_root, cpu = find_python( build_dirs.cpu, build_dirs.python_version)
+        cpu, python_version, python_path, python_root, python_include = windows_find_python(
+                build_dirs.cpu,
+                build_dirs.python_version,
+                )
         python_path = python_path.replace('\\', '/')    # Allows use on Cygwin.
-        env_extra = {
-                'PYTHONPATH': os.path.relpath(build_dirs.dir_so, startdir),
-                }
         command_prefix = f'"{python_path}"'
-    elif state.state_.openbsd:
-        # We have special support to not require LD_LIBRARY_PATH.
-        #command_prefix = f'PYTHONPATH={os.path.relpath(build_dirs.dir_so)}'
-        env_extra = {
-                'PYTHONPATH': os.path.relpath(build_dirs.dir_so, startdir)
-                }
     else:
-        # On Linux it looks like we need to specify
-        # LD_LIBRARY_PATH. fixme: revisit this because these days
-        # jlib.y uses rpath when constructing link commands.
+        pass
+        # We build _mupdf.so using `-Wl,-rpath='$ORIGIN,-z,origin` (see
+        # jlib.link_l_flags() so we don't need to set `LD_LIBRARY_PATH`.
         #
-        env_extra = {
-                'LD_LIBRARY_PATH': os.path.abspath(build_dirs.dir_so),
-                'PYTHONPATH': os.path.relpath(build_dirs.dir_so, startdir),
-                }
+        # But if we did set `LD_LIBRARY_PATH`, it would be with:
+        #
+        #   env_extra[ 'LD_LIBRARY_PATH'] = os.path.abspath(build_dirs.dir_so)
+        #
     return env_extra, command_prefix
 
 def csharp_settings(build_dirs):
@@ -1636,6 +1875,8 @@ def csharp_settings(build_dirs):
     csc: C# compiler.
     mono: C# interpreter ("" on Windows).
     mupdf_cs: MuPDF C# code.
+
+    E.g. on Windows `csc` can be: C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/MSBuild/Current/Bin/Roslyn/csc.exe
     '''
     # On linux requires:
     #   sudo apt install mono-devel
@@ -1647,7 +1888,12 @@ def csharp_settings(build_dirs):
     # which might be because of mixing gcc and clang?
     #
     if state.state_.windows:
-        csc = '"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/MSBuild/Current/Bin/Roslyn/csc.exe"'
+        import wdev
+        vs = wdev.WindowsVS()
+        jlib.log('{vs.description_ml()=}')
+        csc = vs.csc
+        jlib.log('{csc=}')
+        assert csc, f'Unable to find csc.exe'
         mono = ''
     else:
         mono = 'mono'
@@ -1660,7 +1906,12 @@ def csharp_settings(build_dirs):
     return csc, mono, mupdf_cs
 
 
-def make_docs( build_dirs, languages):
+def make_docs( build_dirs, languages_original):
+
+    languages = languages_original
+    if languages == 'all':
+        languages = 'c,c++,python'
+    languages = languages.split( ',')
 
     def do_doxygen( name, outdir, path):
         '''
@@ -1796,6 +2047,7 @@ def make_docs( build_dirs, languages):
                                         <ul>
                                             <li>Date: {jlib.date_time()}
                                             <li>Git: {git_id}
+                                            <li>Command: <code>./scripts/mupdfwrap.py --doc {languages_original}</code>
                                         </ul>
                                     </small>
                                 </div>
@@ -1811,7 +2063,7 @@ def make_docs( build_dirs, languages):
 
 def main2():
 
-    # Set default build directory. Can br overridden by '-d'.
+    # Set default build directory. Can be overridden by '-d'.
     #
     build_dirs = state.BuildDirs()
 
@@ -1912,9 +2164,6 @@ def main2():
 
             elif arg == '--doc':
                 languages = args.next()
-                if languages == 'all':
-                    languages = 'c,c++,python'
-                languages = languages.split( ',')
                 make_docs( build_dirs, languages)
 
             elif arg == '--ref':
@@ -1936,7 +2185,7 @@ def main2():
             elif arg == '--dir-so' or arg == '-d':
                 d = args.next()
                 build_dirs.set_dir_so( d)
-                jlib.log('Have set {build_dirs=}')
+                #jlib.log('Have set {build_dirs=}')
 
             elif arg == '--py-package-multi':
                 # Investigating different combinations of pip, pyproject.toml,
@@ -2103,6 +2352,9 @@ def main2():
                 destination = args.next()
                 jlib.system( f'rsync -aiRz {build_dirs.dir_mupdf}/docs/generated/./ {destination}', verbose=1, out='log')
 
+            elif arg == '--test-internal':
+                _test_get_m_command()
+
             elif arg == '--test-cpp':
                 cpp.test()
 
@@ -2111,16 +2363,16 @@ def main2():
                 env_extra, command_prefix = python_settings(build_dirs)
                 script_py = os.path.relpath( f'{build_dirs.dir_mupdf}/scripts/mupdfwrap_gui.py')
                 if arg == '--test-python-gui':
-                    env_extra[ 'MUPDF_trace'] = '0'
-                    env_extra[ 'MUPDF_check_refs'] = '0'
-                    env_extra[ 'MUPDF_trace_exceptions'] = '1'
+                    #env_extra[ 'MUPDF_trace'] = '1'
+                    #env_extra[ 'MUPDF_check_refs'] = '1'
+                    #env_extra[ 'MUPDF_trace_exceptions'] = '1'
                     command = f'{command_prefix} {script_py}'
                     jlib.system( command, env_extra=env_extra, out='log', verbose=1)
 
                 else:
                     jlib.log( 'running scripts/mupdfwrap_test.py ...')
                     script_py = os.path.relpath( f'{build_dirs.dir_mupdf}/scripts/mupdfwrap_test.py')
-                    command = f'MUPDF_trace=0 MUPDF_check_refs=0 MUPDF_trace_exceptions=1 {command_prefix} {script_py}'
+                    command = f'{command_prefix} {script_py}'
                     with open( f'{build_dirs.dir_mupdf}/platform/python/mupdf_test.py.out.txt', 'w') as f:
                         jlib.system( command, env_extra=env_extra, out='log', verbose=1)
                         # Repeat with pdf_reference17.pdf if it exists.
@@ -2230,10 +2482,11 @@ def main2():
                     jlib.build(
                             ('test-csharp.cs', mupdf_cs),
                             out,
-                            f'{csc} -out:{{OUT}} {{IN}}',
+                            f'"{csc}" -out:{{OUT}} {{IN}}',
                             )
                     if state.state_.windows:
-                        jlib.system(f'cd {build_dirs.dir_so} && {mono} ../../{out}', verbose=1)
+                        out_rel = os.path.relpath( out, build_dirs.dir_so)
+                        jlib.system(f'cd {build_dirs.dir_so} && {mono} {out_rel}', verbose=1)
                     else:
                         command = f'LD_LIBRARY_PATH={build_dirs.dir_so} {mono} ./{out}'
                         if state.state_.openbsd:
@@ -2260,7 +2513,7 @@ def main2():
                 jlib.build(
                         ('scripts/mupdfwrap_gui.cs', mupdf_cs),
                         out,
-                        f'{csc} -unsafe {references}  -out:{{OUT}} {{IN}}'
+                        f'"{csc}" -unsafe {references}  -out:{{OUT}} {{IN}}'
                         )
                 if state.state_.windows:
                     # Don't know how to mimic Unix's LD_LIBRARY_PATH, so for
@@ -2357,17 +2610,15 @@ def main2():
                         args_tail += ' ' + args.next()
                     except StopIteration:
                         break
-                commands = (
-                        f'"{sys.executable}" -m venv {venv}',
-                        f'{venv}\\Scripts\\activate.bat',
-                        # Upgrading pip seems to fail on some Windows systems,
-                        # even when retrying after first failure.
-                        #f'(pip install --upgrade pip || pip install --upgrade pip)',
-                        f'pip install libclang',
-                        f'python {sys.argv[0]} {args_tail}',
-                        f'deactivate',
-                        )
-                command = '&&'.join(commands)
+                command = f'"{sys.executable}" -m venv {venv}'
+                if state.state_.windows:
+                    command += f' && {venv}\\Scripts\\activate.bat'
+                else:
+                    command += f' && . {venv}/bin/activate'
+                command += f' && python -m pip install --upgrade pip'
+                command += f' && python -m pip install libclang'
+                command += f' && python {sys.argv[0]} {args_tail}'
+                command += f' && deactivate'
                 jlib.system(command, out='log', verbose=1)
 
             elif arg == '--windows-cmd':

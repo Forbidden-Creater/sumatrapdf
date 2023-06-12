@@ -28,6 +28,7 @@ void MoveWindow(HWND hwnd, RECT* r);
 
 bool IsOs64();
 bool IsProcess64();
+bool IsArmBuild();
 bool IsRunningInWow64();
 bool IsProcessAndOsArchSame();
 
@@ -106,6 +107,7 @@ Rect GetVirtualScreenRect();
 void DrawRect(HDC, Rect);
 void DrawLine(HDC, Rect);
 void DrawCenteredText(HDC hdc, Rect r, const WCHAR* txt, bool isRTL = false);
+void DrawCenteredText(HDC hdc, Rect r, const char* txt, bool isRTL = false);
 void DrawCenteredText(HDC, const RECT& r, const WCHAR* txt, bool isRTL = false);
 Size TextSizeInHwnd(HWND, const WCHAR*, HFONT = nullptr);
 Size TextSizeInHwnd(HWND, const char*, HFONT = nullptr);
@@ -139,6 +141,7 @@ Rect ChildPosWithinParent(HWND);
 int GetSizeOfDefaultGuiFont();
 HFONT GetDefaultGuiFont(bool bold = false, bool italic = false);
 HFONT GetDefaultGuiFontOfSize(int size);
+HFONT GetUserGuiFont(int size, int weight_offset, char* fontname_utf8);
 
 IStream* CreateStreamFromData(const ByteSlice&);
 ByteSlice GetDataFromStream(IStream* stream, HRESULT* resOpt);
@@ -225,18 +228,30 @@ struct BitmapPixels {
     HDC hdc;
 };
 
-struct RenderedBitmap {
-    HBITMAP hbmp = nullptr;
-    Size size{};
-    HANDLE hMap{};
+struct BlittableBitmap {
+    Size size = {};
 
-    RenderedBitmap(HBITMAP hbmp, Size size, HANDLE hMap = nullptr) : hbmp(hbmp), size(size), hMap(hMap) {
-    }
-    ~RenderedBitmap();
+    BlittableBitmap(){};
+
+    Size GetSize();
+
+    virtual bool Blit(HDC hdc, Rect target) = 0;
+    virtual bool IsValid() = 0;
+
+    virtual ~BlittableBitmap(){};
+};
+
+struct RenderedBitmap : BlittableBitmap {
+    HBITMAP hbmp = nullptr;
+    HANDLE hMap = nullptr;
+
+    RenderedBitmap(HBITMAP hbmp, Size size, HANDLE hMap = nullptr);
+    ~RenderedBitmap() override;
+
     RenderedBitmap* Clone() const;
     HBITMAP GetBitmap() const;
-    Size Size() const;
-    bool StretchDIBits(HDC hdc, Rect target) const;
+    bool IsValid() override;
+    bool Blit(HDC hdc, Rect target) override;
 };
 
 void InitAllCommonControls();

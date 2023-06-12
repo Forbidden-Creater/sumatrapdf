@@ -329,7 +329,7 @@ struct deflate
 {
 	fz_output *chain;
 	z_stream z;
-	size_t bufsize;
+	uInt bufsize;
 	unsigned char *buf;
 };
 
@@ -337,11 +337,12 @@ static void deflate_write(fz_context *ctx, void *opaque, const void *data, size_
 {
 	struct deflate *state = opaque;
 	const unsigned char *p = data;
-	size_t newbufsize;
+	uLong newbufsizeLong;
+	uInt newbufsize;
 	int err;
 
-	newbufsize = n >= UINT_MAX ? UINT_MAX : deflateBound(&state->z, n);
-	newbufsize = newbufsize >= UINT_MAX ? UINT_MAX : newbufsize;
+	newbufsizeLong = n >= UINT_MAX ? UINT_MAX : deflateBound(&state->z, (uLong)n);
+	newbufsize = (uInt)(newbufsizeLong >= UINT_MAX ? UINT_MAX : newbufsizeLong);
 
 	if (state->buf == NULL)
 	{
@@ -361,17 +362,17 @@ static void deflate_write(fz_context *ctx, void *opaque, const void *data, size_
 		n -= state->z.avail_in;
 		p += state->z.avail_in;
 
-	do
-	{
+		do
+		{
 			state->z.next_out = state->buf;
 			state->z.avail_out = state->bufsize;
-		err = deflate(&state->z, Z_NO_FLUSH);
-		if (err != Z_OK)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "zlib compression failed: %d", err);
-		if (state->z.avail_out > 0)
-			fz_write_data(ctx, state->chain, state->z.next_out, state->z.avail_out);
-	} while (state->z.avail_out > 0);
-}
+			err = deflate(&state->z, Z_NO_FLUSH);
+			if (err != Z_OK)
+				fz_throw(ctx, FZ_ERROR_GENERIC, "zlib compression failed: %d", err);
+			if (state->z.avail_out > 0)
+				fz_write_data(ctx, state->chain, state->z.next_out, state->z.avail_out);
+		} while (state->z.avail_out > 0);
+	}
 }
 
 static void deflate_close(fz_context *ctx, void *opaque)

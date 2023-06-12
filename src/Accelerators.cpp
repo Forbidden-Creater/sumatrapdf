@@ -31,7 +31,9 @@
     V(VK_UP, "Up")                  \
     V(VK_DOWN, "Down")              \
     V(VK_NEXT, "PageDown")          \
+    V(VK_NEXT, "PgDown")            \
     V(VK_PRIOR, "PageUp")           \
+    V(VK_PRIOR, "PgUp")             \
     V(VK_BACK, "Back")              \
     V(VK_BACK, "Backspace")         \
     V(VK_DELETE, "Del")             \
@@ -186,6 +188,7 @@ ACCEL gBuiltInAccelerators[] = {
     {FSHIFT | FCONTROL | FVIRTKEY, 'T', CmdReopenLastClosedFile},
     {FCONTROL | FVIRTKEY, VK_NEXT, CmdNextTab},
     {FCONTROL | FVIRTKEY, VK_PRIOR, CmdPrevTab},
+    {FCONTROL | FSHIFT | FVIRTKEY, 'D', CmdCycleTheme},
 
     // need 2 entries for 'a' and 'Shift + a'
     // TODO: maybe add CmdCreateAnnotHighlightAndOpenWindow (kind of clumsy)
@@ -310,6 +313,35 @@ static const char* getVirt(BYTE key, bool isEng) {
     // https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
     // Note: might need to add if we add more shortcuts
     switch (key) {
+        case VK_BACK:
+            return "Backspace";
+        case VK_TAB:
+            return "Tab";
+        case VK_CLEAR:
+            // TODO: ???
+            return "Clear";
+        case VK_RETURN:
+            return "Return";
+        case VK_ESCAPE:
+            return "Esc";
+        case VK_CONVERT:
+            // TODO: ???
+            return "Convert";
+        case VK_NONCONVERT:
+            // TODO: ???
+            return "NoConvert";
+        case VK_ACCEPT:
+            // TODO: ???
+            return "Accept";
+        case VK_MODECHANGE:
+            // TODO: ???
+            return "ModeChange";
+        case VK_SPACE:
+            return "Space";
+        case VK_PRIOR:
+            return "PageUp";
+        case VK_NEXT:
+            return "PageDown";
         case VK_END:
             return "End";
         case VK_HOME:
@@ -319,46 +351,111 @@ static const char* getVirt(BYTE key, bool isEng) {
                 return "<-";
             }
             return "Left";
+        case VK_UP:
+            return "Up";
         case VK_RIGHT:
             if (!isEng) {
                 return "->";
             }
             return "Right";
-        case VK_UP:
-            return "Up";
         case VK_DOWN:
             return "Down";
-        case VK_NEXT:
-            return "PageDown";
-        case VK_PRIOR:
-            return "PageUp";
-        case VK_BACK:
-            return "Backspace";
-        case VK_DELETE:
-            return "Del";
+        case VK_SELECT:
+            return "Select";
+        case VK_PRINT:
+            return "Print";
+        case VK_EXECUTE:
+            return "Execute";
+        case VK_SNAPSHOT:
+            return "PrtSc";
         case VK_INSERT:
             return "Insert";
-        case VK_ESCAPE:
-            return "Esc";
-        case VK_RETURN:
-            return "Return";
-        case VK_SPACE:
-            return "Space";
+        case VK_DELETE:
+            return "Del";
+        case VK_HELP:
+            return "Help";
+        case VK_SLEEP:
+            // TODO: ???
+            return "Sleep";
         case VK_MULTIPLY:
             return "*";
         case VK_ADD:
         case VK_OEM_PLUS:
             return "+";
+        case VK_SEPARATOR:
+            // TODO: ???
+            return "Separator";
         case VK_SUBTRACT:
         case VK_OEM_MINUS:
             return "-";
+        case VK_DECIMAL:
+            // TODO: ???
+            return "Decimal";
         case VK_DIVIDE:
             return "/";
-        case VK_HELP:
-            return "Help";
-        case VK_SELECT:
-            return "Select";
+        case VK_SCROLL:
+            // TODO: ???
+            return "Scroll";
     }
+    /*
+    TOOD: add those as well?
+        #define VK_BROWSER_BACK        0xA6
+        #define VK_BROWSER_FORWARD     0xA7
+        #define VK_BROWSER_REFRESH     0xA8
+        #define VK_BROWSER_STOP        0xA9
+        #define VK_BROWSER_SEARCH      0xAA
+        #define VK_BROWSER_FAVORITES   0xAB
+        #define VK_BROWSER_HOME        0xAC
+
+        #define VK_VOLUME_MUTE         0xAD
+        #define VK_VOLUME_DOWN         0xAE
+        #define VK_VOLUME_UP           0xAF
+        #define VK_MEDIA_NEXT_TRACK    0xB0
+        #define VK_MEDIA_PREV_TRACK    0xB1
+        #define VK_MEDIA_STOP          0xB2
+        #define VK_MEDIA_PLAY_PAUSE    0xB3
+        #define VK_LAUNCH_MAIL         0xB4
+        #define VK_LAUNCH_MEDIA_SELECT 0xB5
+        #define VK_LAUNCH_APP1         0xB6
+        #define VK_LAUNCH_APP2         0xB7
+
+        #define VK_OEM_4          0xDB  //  '[{' for US
+        #define VK_OEM_5          0xDC  //  '\|' for US
+        #define VK_OEM_6          0xDD  //  ']}' for US
+        #define VK_OEM_7          0xDE  //  ''"' for US
+        #define VK_OEM_8          0xDF
+
+        #define VK_OEM_AX         0xE1  //  'AX' key on Japanese AX kbd
+        #define VK_OEM_102        0xE2  //  "<>" or "\|" on RT 102-key kbd.
+        #define VK_ICO_HELP       0xE3  //  Help key on ICO
+        #define VK_ICO_00         0xE4  //  00 key on ICO
+
+        #define VK_PROCESSKEY     0xE5
+
+        #define VK_OEM_RESET      0xE9
+        #define VK_OEM_JUMP       0xEA
+        #define VK_OEM_PA1        0xEB
+        #define VK_OEM_PA2        0xEC
+        #define VK_OEM_PA3        0xED
+        #define VK_OEM_WSCTRL     0xEE
+        #define VK_OEM_CUSEL      0xEF
+        #define VK_OEM_ATTN       0xF0
+        #define VK_OEM_FINISH     0xF1
+        #define VK_OEM_COPY       0xF2
+        #define VK_OEM_AUTO       0xF3
+        #define VK_OEM_ENLW       0xF4
+        #define VK_OEM_BACKTAB    0xF5
+
+        #define VK_ATTN           0xF6
+        #define VK_CRSEL          0xF7
+        #define VK_EXSEL          0xF8
+        #define VK_EREOF          0xF9
+        #define VK_PLAY           0xFA
+        #define VK_ZOOM           0xFB
+        #define VK_NONAME         0xFC
+        #define VK_PA1            0xFD
+        #define VK_OEM_CLEAR      0xFE
+    */
     return nullptr;
 }
 
@@ -393,18 +490,17 @@ void AppendAccelKeyToMenuString(str::Str& str, const ACCEL& a) {
     bool isVirt = virt & FVIRTKEY;
     BYTE key = a.key;
 
-    if (isVirt && key >= VK_F1 && key <= VK_F24) {
-        int n = key - VK_F1 + 1;
-        str.AppendFmt("F%d", n);
-        return;
-    }
-    if (isVirt && key >= VK_NUMPAD0 && key <= VK_NUMPAD9) {
-        WCHAR c = (WCHAR)key - VK_NUMPAD0 + '0';
-        str.AppendChar(c);
-        return;
-    }
-
     if (isVirt) {
+        if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) {
+            WCHAR c = (WCHAR)key - VK_NUMPAD0 + '0';
+            str.AppendChar(c);
+            return;
+        }
+        if (key >= VK_F1 && key <= VK_F24) {
+            int n = key - VK_F1 + 1;
+            str.AppendFmt("F%d", n);
+            return;
+        }
         const char* s = getVirt(key, isEng);
         if (s) {
             str.Append(s);
@@ -415,12 +511,16 @@ void AppendAccelKeyToMenuString(str::Str& str, const ACCEL& a) {
     // virtual codes overlap with some ascii chars like '-' is VK_INSERT
     // so for non-virtual assume it's a single char
     bool isAscii = (key >= 'A' && key <= 'Z') || (key >= 'a' && key <= 'z') || (key >= '0' && key <= '9');
+    static const char* otherAscii = "[]'`~@#$%^&*(){}\\|?<>!,.+-=_;:\"";
+    if (str::FindChar(otherAscii, key)) {
+        isAscii = true;
+    }
     if (isAscii) {
         str.AppendChar((char)key);
         return;
     }
 
-    logf("Unknown key: 0x%x, virt: 0x%x\n", virt, key);
+    logf("Unknown key: 0x%x, virt: 0x%x\n", key, virt);
     ReportIf(true);
 }
 
@@ -471,22 +571,19 @@ static bool IsSafeAccel(const ACCEL& a) {
     return true;
 }
 
-static ACCEL* gAccels = nullptr;
-static int gAccelsCount = 0;
+ACCEL* gAccels = nullptr;
+int gAccelsCount = 0;
 
-static ACCEL* gSafeAccels = nullptr;
-static int gSafeAccelsCount = 0;
-
-static HACCEL gAccelerators = nullptr;
-static HACCEL gSafeAccelerators = nullptr;
+static HACCEL gAccelTables[3] = {
+    nullptr, // for all but edit and tree view
+    nullptr, // for edit
+    nullptr, // for tree view
+};
 
 /* returns a pointer to HACCEL so that we can update it and message loop will use
 the latest version */
-HACCEL* CreateSumatraAcceleratorTable() {
-    DestroyAcceleratorTable(gAccelerators);
-    DestroyAcceleratorTable(gSafeAccelerators);
-    free(gAccels);
-    free(gSafeAccels);
+static void CreateSumatraAcceleratorTable() {
+    CrashIf(gAccelTables[0] || gAccelTables[1] || gAccelTables[2]);
 
     int nBuiltIn = (int)dimof(gBuiltInAccelerators);
 
@@ -498,10 +595,18 @@ HACCEL* CreateSumatraAcceleratorTable() {
     // build a combined accelerator table of those defined in settings file
     // and built-in shortcuts. Custom shortcuts over-ride built-in
     int nMax = nBuiltIn + nCustomShortcuts;
+    // https://github.com/sumatrapdfreader/sumatrapdf/issues/2981
+    // sizeof(ACCEL) is 6 so odd number will cause treeViewAccels to
+    // be mis-aligined. Rounding to 2 should be enoug, do 4 for extra safety
+    nMax = RoundUp(nMax, 4);
     ACCEL* accels = AllocArray<ACCEL>(nMax);
     int nAccels = 0;
-    ACCEL* safeAccels = AllocArray<ACCEL>(nMax);
-    int nSafeAccels = 0;
+    // perf: only 1 allocation for 2 arrays
+    ACCEL* toFreeAccels = AllocArray<ACCEL>(nMax * 2);
+    ACCEL* editAccels = toFreeAccels;
+    ACCEL* treeViewAccels = toFreeAccels + nMax;
+    int nEditAccels = 0;
+    int nTreeViewAccels = 0;
 
     for (Shortcut* shortcut : *gGlobalPrefs->shortcuts) {
         char* cmd = shortcut->cmd;
@@ -520,7 +625,12 @@ HACCEL* CreateSumatraAcceleratorTable() {
         }
         accels[nAccels++] = accel;
         if (IsSafeAccel(accel)) {
-            safeAccels[nSafeAccels++] = accel;
+            editAccels[nEditAccels++] = accel;
+            treeViewAccels[nTreeViewAccels++] = accel;
+        }
+        if (cmdId == CmdToggleBookmarks && !IsSafeAccel(accel)) {
+            // https://github.com/sumatrapdfreader/sumatrapdf/issues/2832
+            treeViewAccels[nTreeViewAccels++] = accel;
         }
     }
 
@@ -537,24 +647,45 @@ HACCEL* CreateSumatraAcceleratorTable() {
         }
         accels[nAccels++] = accel;
         if (IsSafeAccel(accel)) {
-            safeAccels[nSafeAccels++] = accel;
+            editAccels[nEditAccels++] = accel;
+            treeViewAccels[nTreeViewAccels++] = accel;
         }
     }
 
     gAccels = accels;
     gAccelsCount = nAccels;
-    gSafeAccels = safeAccels;
-    gSafeAccelsCount = nSafeAccels;
 
-    gAccelerators = CreateAcceleratorTableW(gAccels, gAccelsCount);
-    CrashIf(gAccelerators == nullptr);
-    gSafeAccelerators = CreateAcceleratorTableW(gSafeAccels, gSafeAccelsCount);
-    return &gAccelerators;
+    gAccelTables[0] = CreateAcceleratorTableW(gAccels, gAccelsCount);
+    CrashIf(gAccelTables[0] == nullptr);
+    gAccelTables[1] = CreateAcceleratorTableW(editAccels, nEditAccels);
+    CrashIf(gAccelTables[1] == nullptr);
+    gAccelTables[2] = CreateAcceleratorTableW(treeViewAccels, nTreeViewAccels);
+    CrashIf(gAccelTables[2] == nullptr);
+
+    free(toFreeAccels);
 }
 
-HACCEL* GetSafeAcceleratorTable() {
-    CrashIf(!gSafeAccelerators);
-    return &gSafeAccelerators;
+void FreeAcceleratorTables() {
+    DestroyAcceleratorTable(gAccelTables[0]);
+    DestroyAcceleratorTable(gAccelTables[1]);
+    DestroyAcceleratorTable(gAccelTables[2]);
+    gAccelTables[0] = nullptr;
+    gAccelTables[1] = nullptr;
+    gAccelTables[2] = nullptr;
+    free(gAccels);
+    gAccels = nullptr;
+}
+
+void ReCreateSumatraAcceleratorTable() {
+    FreeAcceleratorTables();
+    CreateSumatraAcceleratorTable();
+}
+
+HACCEL* GetAcceleratorTables() {
+    if (gAccelTables[0] == nullptr) {
+        CreateSumatraAcceleratorTable();
+    }
+    return gAccelTables;
 }
 
 bool GetAccelByCmd(int cmdId, ACCEL& accelOut) {

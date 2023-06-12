@@ -59,7 +59,7 @@ def expand_nv( text, caller=1):
     >>> x = 45
     >>> y = 'hello'
     >>> expand_nv( 'foo {x} {y=}')
-    'foo 45 y=hello'
+    "foo 45 y='hello'"
 
     <expression> can also use ':' and '!' to control formatting, like
     str.format().
@@ -76,7 +76,7 @@ def expand_nv( text, caller=1):
     >>> foo = 45
     >>> y = 'hello'
     >>> expand_nv('{=foo y}')
-    'foo=45 y=hello'
+    "foo=45 y='hello'"
     '''
     if isinstance( caller, int):
         frame_record = inspect.stack()[ caller]
@@ -127,6 +127,13 @@ def expand_nv( text, caller=1):
                     nv = True
                     item = item[:-1]
                 expression, tail = split_first_of( item, '!:')
+                if expression.endswith('='):
+                    # Basic PEP 501 support.
+                    nv = True
+                    expression = expression[:-1]
+                if not tail:
+                    # Default to !r as in PEP 501.
+                    tail = '!r'
                 try:
                     value = eval( expression, frame.f_globals, frame.f_locals)
                     value_text = ('{0%s}' % tail).format( value)
@@ -238,7 +245,7 @@ g_log_prefixes = [
 
 _log_text_line_start = True
 
-def log_text( text=None, caller=1, nv=True, raw=False):
+def log_text( text=None, caller=1, nv=True, raw=False, nl=True):
     '''
     Returns log text, prepending all lines with text from g_log_prefixes.
 
@@ -251,6 +258,9 @@ def log_text( text=None, caller=1, nv=True, raw=False):
         Otherwise should be a frame record as returned by inspect.stack()[].
     nv:
         If true, we expand {...} in <text> using expand_nv().
+    nl:
+        If true (the default) we terminate text with a newline if not already
+        present. Ignored if `raw` is true.
     '''
     if isinstance( caller, int):
         caller += 1
@@ -286,7 +296,7 @@ def log_text( text=None, caller=1, nv=True, raw=False):
         nl = text.find('\n', pos)
         if nl == -1:
             text2 += text[pos:]
-            if not raw:
+            if not raw and nl:
                 text2 += '\n'
             pos = len(text)
         else:
@@ -816,10 +826,10 @@ def exception_info(
 
             >>> def c():
             ...     raise Exception( 'c() failed')
-        >>> def b():
-        ...     try:
-        ...         c()
-        ...     except Exception as e:
+            >>> def b():
+            ...     try:
+            ...         c()
+            ...     except Exception as e:
             ...         exception_info( e, file=sys.stdout, _filelinefn=0)
             >>> def a():
             ...     b()
@@ -840,11 +850,11 @@ def exception_info(
             ...     raise Exception( 'e(): deliberate error')
             >>> def d():
             ...     e()
-        >>> def c():
-        ...     try:
-        ...         d()
-        ...     except Exception as e:
-        ...         raise Exception( 'c: d() failed') from e
+            >>> def c():
+            ...     try:
+            ...         d()
+            ...     except Exception as e:
+            ...         raise Exception( 'c: d() failed') from e
             >>> def b():
             ...     try:
             ...         c()
@@ -856,44 +866,44 @@ def exception_info(
             With chain=True (the default), we output low-level exceptions
             first, matching the behaviour of traceback.* functions:
 
-        >>> g_chain = True
-        >>> a() # doctest: +REPORT_UDIFF +ELLIPSIS
-        Traceback (most recent call last):
-            c(): d()
-            d(): e()
-            e(): raise Exception('e(): deliberate error')
-        Exception: e(): deliberate error
-        <BLANKLINE>
-        The above exception was the direct cause of the following exception:
-        Traceback (most recent call last):
-            ...
-            <module>(): a() # doctest: +REPORT_UDIFF +ELLIPSIS
-            a(): b()
-            b(): exception_info( file=sys.stdout, chain=g_chain, _filelinefn=0)
-            ^except raise:
-            b(): c()
-            c(): raise Exception( 'c: d() failed') from e
-        Exception: c: d() failed
+                >>> g_chain = True
+                >>> a() # doctest: +REPORT_UDIFF +ELLIPSIS
+                Traceback (most recent call last):
+                    c(): d()
+                    d(): e()
+                    e(): raise Exception( 'e(): deliberate error')
+                Exception: e(): deliberate error
+                <BLANKLINE>
+                The above exception was the direct cause of the following exception:
+                Traceback (most recent call last):
+                    ...
+                    <module>(): a() # doctest: +REPORT_UDIFF +ELLIPSIS
+                    a(): b()
+                    b(): exception_info( file=sys.stdout, chain=g_chain, _filelinefn=0)
+                    ^except raise:
+                    b(): c()
+                    c(): raise Exception( 'c: d() failed') from e
+                Exception: c: d() failed
 
-        With chain='because', we output high-level exceptions first:
-        >>> g_chain = 'because'
-        >>> a() # doctest: +REPORT_UDIFF +ELLIPSIS
-        Traceback (most recent call last):
-            ...
-            <module>(): a() # doctest: +REPORT_UDIFF +ELLIPSIS
-            a(): b()
-            b(): exception_info( file=sys.stdout, chain=g_chain, _filelinefn=0)
-            ^except raise:
-            b(): c()
-            c(): raise Exception( 'c: d() failed') from e
-        Exception: c: d() failed
-        <BLANKLINE>
-        Because:
-        Traceback (most recent call last):
-            c(): d()
-            d(): e()
-            e(): raise Exception('e(): deliberate error')
-        Exception: e(): deliberate error
+            With chain='because', we output high-level exceptions first:
+                >>> g_chain = 'because'
+                >>> a() # doctest: +REPORT_UDIFF +ELLIPSIS
+                Traceback (most recent call last):
+                    ...
+                    <module>(): a() # doctest: +REPORT_UDIFF +ELLIPSIS
+                    a(): b()
+                    b(): exception_info( file=sys.stdout, chain=g_chain, _filelinefn=0)
+                    ^except raise:
+                    b(): c()
+                    c(): raise Exception( 'c: d() failed') from e
+                Exception: c: d() failed
+                <BLANKLINE>
+                Because:
+                Traceback (most recent call last):
+                    c(): d()
+                    d(): e()
+                    e(): raise Exception( 'e(): deliberate error')
+                Exception: e(): deliberate error
 
         Show current backtrace by passing exception_or_traceback=None:
             >>> def c():
@@ -1649,8 +1659,11 @@ def update_file( text, filename, return_different=False):
 def find_in_paths( name, paths=None):
     '''
     Looks for <name> in paths and returns complete path. paths is list/tuple or
-    colon-separated string; if None we use $PATH.
+    colon-separated string; if None we use $PATH. If `name` contains `/`, we
+    return `name` itself if it is a file, regardless of $PATH.
     '''
+    if '/' in name:
+        return name if os.path.isfile( name) else None
     if paths is None:
         paths = os.environ.get( 'PATH', '')
     if isinstance( paths, str):
@@ -1659,6 +1672,25 @@ def find_in_paths( name, paths=None):
         p = f'{path}/{name}'
         if os.path.isfile( p):
             return p
+
+
+def fs_find_in_paths( name, paths=None, verbose=False):
+    '''
+    Looks for `name` in paths and returns complete path. `paths` is list/tuple
+    or colon-separated string; if `None` we use `$PATH`.
+    '''
+    if paths is None:
+        paths = os.environ.get( 'PATH', '')
+    if isinstance( paths, str):
+        paths = paths.split( os.pathsep)
+    for path in paths:
+        p = os.path.join( path, name)
+        if os.path.isfile( p):
+            if verbose:
+                log( 'Returning: {p}')
+            return p
+        if verbose:
+            log( 'Does not exist or is not file: {p}')
 
 
 def mtime( filename, default=0):
@@ -1987,36 +2019,40 @@ def link_l_flags( sos, ld_origin=None):
     We return -L flags for each unique parent directory and -l flags for each
     leafname.
 
-    In addition on Linux we append " -Wl,-rpath='$ORIGIN'" so that libraries
-    will be searched for next to each other. This can be disabled by setting
-    ld_origin to false.
+    In addition on Linux and OpenBSD we append " -Wl,-rpath='$ORIGIN,-z,origin"
+    so that libraries will be searched for next to each other. This can be
+    disabled by setting ld_origin to false.
     '''
     dirs = set()
     names = []
     if isinstance( sos, str):
         sos = [sos]
+    ret = ''
     for so in sos:
         if not so:
             continue
         dir_ = os.path.dirname( so)
         name = os.path.basename( so)
         assert name.startswith( 'lib'), f'name={name}'
-        assert name.endswith ( '.so'), f'name={name}'
-        name = name[3:-3]
-        dirs.add( dir_)
-        names.append( name)
+        if name.endswith( '.so'):
+            dirs.add( dir_)
+            names.append( f'-l {name[3:-3]}')
+        elif name.endswith( '.a'):
+            names.append( so)
+        else:
+            assert 0, f'leaf does not end in .so or .a: {so}'
     ret = ''
     # Important to use sorted() here, otherwise ordering from set() is
     # arbitrary causing occasional spurious rebuilds.
     for dir_ in sorted(dirs):
         ret += f' -L {dir_}'
     for name in names:
-        ret += f' -l {name}'
+        ret += f' {name}'
     if ld_origin is None:
-        if os.uname()[0] == 'Linux':
+        if os.uname()[0] in ( 'Linux', 'OpenBSD'):
             ld_origin = True
     if ld_origin:
-        ret += " -Wl,-rpath='$ORIGIN'"
+        ret += " -Wl,-rpath='$ORIGIN',-z,origin"
     #log('{sos=} {ld_origin=} {ret=}')
     return ret
 

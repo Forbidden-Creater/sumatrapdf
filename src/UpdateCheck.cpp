@@ -35,12 +35,17 @@ static const char* kindNotifUpdateCheckInProgress = "notifUpdateCheckInProgress"
 // for testing. if true will ignore version checks etc. and act like there's an update
 constexpr bool gForceAutoUpdate = false;
 
+// certificate on www.sumatrapdfreader.org is not supported by win7 and win8.1
+// (doesn't have the ciphers they understand)
+// so we first try sumatra-website.onrender.com which should work
 // clang-format off
 #if defined(PRE_RELEASE_VER)
 //https://kjkpubsf.sfo2.digitaloceanspaces.com/software/sumatrapdf/sumpdf-prerelease-update.txt
 constexpr const char* kUpdateInfoURL = "https://www.sumatrapdfreader.org/updatecheck-pre-release.txt";
+constexpr const char* kUpdateInfoURL2 = "https://sumatra-website.onrender.com/updatecheck-pre-release.txt";
 #else
 constexpr const char* kUpdateInfoURL = "https://www.sumatrapdfreader.org/update-check-rel.txt";
+constexpr const char* kUpdateInfoURL2 = "https://sumatra-website.onrender.com/update-check-rel.txt";
 #endif
 
 #ifndef WEBSITE_DOWNLOAD_PAGE_URL
@@ -60,8 +65,10 @@ struct UpdateInfo {
     HWND hwndParent = nullptr;
     const char* latestVer = nullptr;
     const char* installer64 = nullptr;
+    const char* installerArm64 = nullptr;
     const char* installer32 = nullptr;
     const char* portable64 = nullptr;
+    const char* portableArm64 = nullptr;
     const char* portable32 = nullptr;
 
     const char* dlURL = nullptr;
@@ -71,8 +78,10 @@ struct UpdateInfo {
     ~UpdateInfo() {
         str::Free(latestVer);
         str::Free(installer64);
+        str::Free(installerArm64);
         str::Free(installer32);
         str::Free(portable64);
+        str::Free(portableArm64);
         str::Free(portable32);
         str::Free(dlURL);
         str::Free(installerPath);
@@ -118,25 +127,21 @@ static UpdateInfo* ParseUpdateInfo(const char* d) {
 
     // those are optional. if missing, we'll just tell the user to go to website to download
     res->installer64 = str::Dup(node->GetValue("Installer64"));
+    res->installerArm64 = str::Dup(node->GetValue("InstallerArm64"));
     res->installer32 = str::Dup(node->GetValue("Installer32"));
     res->portable64 = str::Dup(node->GetValue("PortableExe64"));
+    res->portableArm64 = str::Dup(node->GetValue("PortableExeArm64"));
     res->portable32 = str::Dup(node->GetValue("PortableExe32"));
 
     // figure out which executable to download
     const char* dlURL = nullptr;
     bool isDll = IsDllBuild();
-    if (IsProcess64()) {
-        if (isDll) {
-            dlURL = res->installer64;
-        } else {
-            dlURL = res->portable64;
-        }
+    if (IsArmBuild()) {
+        dlURL = isDll ? res->installerArm64 : res->portableArm64;
+    } else if (IsProcess64()) {
+        dlURL = isDll ? res->installer64 : res->portable64;
     } else {
-        if (isDll) {
-            dlURL = res->installer32;
-        } else {
-            dlURL = res->portable32;
-        }
+        dlURL = isDll ? res->installer32 : res->portable32;
     }
     res->dlURL = str::Dup(dlURL);
     return res;
@@ -295,7 +300,8 @@ static DWORD ShowAutoUpdateDialog(HWND hwndParent, HttpRsp* rsp, UpdateCheck upd
         return ERROR_INTERNET_INVALID_URL;
     }
 
-    if (!str::StartsWith(url, kUpdateInfoURL)) {
+    bool isValidURL = str::StartsWith(url, kUpdateInfoURL) || str::StartsWith(url, kUpdateInfoURL2);
+    if (!isValidURL) {
         logf("ShowAutoUpdateDialog: '%s' is not a valid url\n", url);
         return ERROR_INTERNET_INVALID_URL;
     }
@@ -379,28 +385,8 @@ static DWORD ShowAutoUpdateDialog(HWND hwndParent, HttpRsp* rsp, UpdateCheck upd
     return 0;
 }
 
-// start auto-update check by downloading auto-update information from url
-// on a background thread and processing the retrieved data on ui thread
-// if autoCheck is true, this is a check *not* triggered by explicit action
-// of the user and therefore will show less UI
-void CheckForUpdateAsync(MainWindow* win, UpdateCheck updateCheckType) {
-    if (!ShouldCheckForUpdate(updateCheckType)) {
-        return;
-    }
-
-    if (UpdateCheck::UserInitiated == updateCheckType) {
-        NotificationCreateArgs args;
-        args.hwndParent = win->hwndCanvas;
-        args.msg = _TRA("Checking for update...");
-        args.warning = true;
-        args.timeoutMs = 0;
-        args.groupId = kindNotifUpdateCheckInProgress;
-        ShowNotification(args);
-    }
-    GetSystemTimeAsFileTime(&gGlobalPrefs->timeOfLastUpdateCheck);
-    gUpdateCheckInProgress = true;
-    HWND hwnd = win->hwndFrame;
-    str::Str url = kUpdateInfoURL;
+static void BuildUpdateURL(str::Str& url, const char* baseURL, UpdateCheck updateCheckType) {
+    url = baseURL;
     url.Append("?v=");
     url.Append(UPDATE_CHECK_VERA);
     url.Append("&os=");
@@ -426,8 +412,45 @@ void CheckForUpdateAsync(MainWindow* win, UpdateCheck updateCheckType) {
     if (UpdateCheck::UserInitiated == updateCheckType) {
         url.Append("&force");
     }
-    char* uri = url.Get();
-    HttpGetAsync(uri, [=](HttpRsp* rsp) {
+}
+
+// start auto-update check by downloading auto-update information from url
+// on a background thread and processing the retrieved data on ui thread
+// if autoCheck is true, this is a check *not* triggered by explicit action
+// of the user and therefore will show less UI
+void CheckForUpdateAsync(MainWindow* win, UpdateCheck updateCheckType) {
+    if (!ShouldCheckForUpdate(updateCheckType)) {
+        return;
+    }
+
+    if (UpdateCheck::UserInitiated == updateCheckType) {
+        NotificationCreateArgs args;
+        args.hwndParent = win->hwndCanvas;
+        args.msg = _TRA("Checking for update...");
+        args.warning = true;
+        args.timeoutMs = 0;
+        args.groupId = kindNotifUpdateCheckInProgress;
+        ShowNotification(args);
+    }
+    GetSystemTimeAsFileTime(&gGlobalPrefs->timeOfLastUpdateCheck);
+    gUpdateCheckInProgress = true;
+
+    HWND hwnd = win->hwndFrame;
+    RunAsync([=] {
+        str::Str url;
+        BuildUpdateURL(url, kUpdateInfoURL2, updateCheckType);
+        char* uri = url.Get();
+        HttpRsp* rsp = new HttpRsp;
+        rsp->url.SetCopy(uri);
+        bool ok = HttpGet(uri, rsp);
+        if (!ok) {
+            delete rsp;
+            BuildUpdateURL(url, kUpdateInfoURL, updateCheckType);
+            uri = url.Get();
+            rsp = new HttpRsp;
+            rsp->url.SetCopy(uri);
+            HttpGet(uri, rsp);
+        }
         uitask::Post([=] {
             DWORD err = ShowAutoUpdateDialog(hwnd, rsp, updateCheckType);
             if ((err != 0) && (updateCheckType == UpdateCheck::UserInitiated)) {

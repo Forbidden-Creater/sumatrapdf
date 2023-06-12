@@ -739,7 +739,7 @@ static void PaintPageFrameAndShadow(HDC hdc, Rect& bounds, Rect& pageRect, bool 
 #else
 static void PaintPageFrameAndShadow(HDC hdc, Rect& bounds, Rect&, bool) {
     AutoDeletePen pen(CreatePen(PS_NULL, 0, 0));
-    auto col = GetAppColor(AppColor::MainWindowBg);
+    auto col = GetMainWindowBackgroundColor();
     AutoDeleteBrush brush(CreateSolidBrush(col));
     ScopedSelectPen restorePen(hdc, pen);
     ScopedSelectObject restoreBrush(hdc, brush);
@@ -829,7 +829,7 @@ static void DrawDocument(MainWindow* win, HDC hdc, RECT* rcArea) {
         ScopedGdiObj<HBRUSH> brush(CreateSolidBrush(WIN_COL_BLACK));
         FillRect(hdc, rcArea, brush);
     } else if (0 == nGCols) {
-        auto col = GetAppColor(AppColor::NoDocBg);
+        auto col = GetMainWindowBackgroundColor();
         ScopedGdiObj<HBRUSH> brush(CreateSolidBrush(col));
         FillRect(hdc, rcArea, brush);
     } else {
@@ -918,7 +918,7 @@ static void DrawDocument(MainWindow* win, HDC hdc, RECT* rcArea) {
         if (renderDelay != 0) {
             AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, "MS Shell Dlg", 14));
             HGDIOBJ hPrevFont = SelectObject(hdc, fontRightTxt);
-            auto col = GetAppColor(AppColor::MainWindowText);
+            auto col = currentTheme->mainWindow.textColor;
             SetTextColor(hdc, col);
             if (renderDelay != RENDER_DELAY_FAILED) {
                 if (renderDelay < REPAINT_MESSAGE_DELAY_IN_MS) {
@@ -1495,11 +1495,13 @@ static void OnPaintError(MainWindow* win) {
 
     AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, "MS Shell Dlg", 14));
     HGDIOBJ hPrevFont = SelectObject(hdc, fontRightTxt);
-    auto bgCol = GetAppColor(AppColor::NoDocBg);
+    auto bgCol = GetMainWindowBackgroundColor();
     ScopedGdiObj<HBRUSH> bgBrush(CreateSolidBrush(bgCol));
     FillRect(hdc, &ps.rcPaint, bgBrush);
     // TODO: should this be "Error opening %s"?
-    AutoFreeWstr msg(str::Format(_TR("Error loading %s"), win->CurrentTab()->filePath.Get()));
+    auto tab = win->CurrentTab();
+    const char* filePath = tab->filePath.Get();
+    TempStr msg = str::FormatTemp(_TRA("Error loading %s"), filePath);
     DrawCenteredText(hdc, ClientRect(win->hwndCanvas), msg, IsUIRightToLeft());
     SelectObject(hdc, hPrevFont);
 
@@ -1546,7 +1548,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
         case REPAINT_TIMER_ID:
             win->delayedRepaintTimer = 0;
             KillTimer(hwnd, REPAINT_TIMER_ID);
-            win->RedrawAllIncludingNonClient(true);
+            win->RedrawAllIncludingNonClient();
             break;
 
         case SMOOTHSCROLL_TIMER_ID:
@@ -1647,7 +1649,7 @@ static void OnDropFiles(MainWindow* win, HDROP hDrop, bool dragFinish) {
             win = CreateAndShowMainWindow(nullptr);
             args.win = win;
         }
-        LoadDocumentAsync(&args);
+        LoadDocumentAsync(&args, false);
     }
 }
 

@@ -60,7 +60,7 @@ class Package:
     def __init__(self,
             name,
             version,
-            root=None,
+            root = None,
             summary = None,
             description = None,
             classifiers = None,
@@ -173,6 +173,11 @@ class Package:
                 f' config_settings={config_settings}'
                 f' metadata_directory={metadata_directory}'
                 )
+
+        _log('build_wheel(): os.environ is:')
+        for n in sorted( os.environ.keys()):
+            v = os.environ[ n]
+            _log( f'    {n}: {v!r}')
 
         # Find platform tag used in wheel filename, as described in
         # PEP-0425. E.g. 'openbsd_6_8_amd64', 'win_amd64' or 'win32'.
@@ -589,9 +594,9 @@ class Package:
         add('Author', self.author)
         add('Author-email', self.author_email)
         if self.license:        add('License', self.license)
-        if self.url_source:  add('Home-page', f'Source, {self.url_source}')
-        if self.url_docs:    add('Home-page', f'Source, {self.url_docs}')
-        if self.url_tracker: add('Home-page', f'Source, {self.url_tracker}')
+        if self.url_source:     add('Home-page', f'Source, {self.url_source}')
+        if self.url_docs:       add('Home-page', f'Source, {self.url_docs}')
+        if self.url_tracker:    add('Home-page', f'Source, {self.url_tracker}')
         if self.url_changelog:  add('Home-page', f'Source, {self.url_changelog}')
         if self.keywords:
             add('Keywords', self.keywords)

@@ -32,6 +32,9 @@
 #include "Translations.h"
 #include "SvgIcons.h"
 #include "SumatraConfig.h"
+#include "Theme.h"
+#include "wingui/Layout.h"
+#include "wingui/WinGui.h"
 
 #include "utils/Log.h"
 
@@ -288,9 +291,28 @@ void UpdateFindbox(MainWindow* win) {
     }
 }
 
+LRESULT CALLBACK BgSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass,
+                                DWORD_PTR dwRefData) {
+    if (WM_ERASEBKGND == uMsg && currentTheme->colorizeControls) {
+        HDC hdc = (HDC)wParam;
+        RECT rect;
+        GetClientRect(hWnd, &rect);
+        SetTextColor(hdc, currentTheme->mainWindow.textColor);
+        SetBkColor(hdc, currentTheme->mainWindow.controlBackgroundColor);
+        auto bg = CreateSolidBrush(currentTheme->mainWindow.controlBackgroundColor);
+        FillRect(hdc, &rect, bg);
+        DeleteObject(bg);
+        return 1;
+    }
+    if (WM_NCDESTROY == uMsg) {
+        RemoveWindowSubclass(hWnd, BgSubclassProc, uIdSubclass);
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 static WNDPROC DefWndProcToolbar = nullptr;
 static LRESULT CALLBACK WndProcToolbar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (WM_CTLCOLORSTATIC == msg) {
+    if (WM_CTLCOLORSTATIC == msg || WM_CTLCOLOREDIT == msg) {
         HWND hStatic = (HWND)lp;
         HDC hdc = (HDC)wp;
         MainWindow* win = FindMainWindowByHwnd(hStatic);
@@ -305,21 +327,14 @@ static LRESULT CALLBACK WndProcToolbar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             return (LRESULT)br;
         }
         if ((win->hwndFindBg != hStatic && win->hwndPageBg != hStatic) || theme::IsAppThemed()) {
-#if defined(USE_THEME_COLORS)
-            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
-            SetBkColor(hdc, GetCurrentTheme()->mainWindow.backgroundColor);
-            // SetBkMode(hdc, TRANSPARENT);
-            auto br = CreateSolidBrush(GetCurrentTheme()->mainWindow.backgroundColor);
-#else
-            // Set color used in "Page:" and "Find:" labels to black
+            // Set color used in "Page:" and "Find:" labels
             auto col = RGB(0x00, 0x00, 0x00);
-            SetTextColor(hdc, col);
+            SetTextColor(hdc, currentTheme->mainWindow.textColor);
             SetBkMode(hdc, TRANSPARENT);
-            auto br = GetStockBrush(NULL_BRUSH);
-#endif
-            return (LRESULT)br;
+            return (LRESULT)win->brControlBgColor;
         }
     }
+
     if (WM_COMMAND == msg) {
         HWND hEdit = (HWND)lp;
         MainWindow* win = FindMainWindowByHwnd(hEdit);
@@ -507,19 +522,18 @@ static void CreateFindBox(MainWindow* win, HFONT hfont, int iconDy) {
     int findBoxDx = DpiScale(win->hwndFrame, 160);
     HMODULE hmod = GetModuleHandleW(nullptr);
     HWND p = win->hwndToolbar;
-    DWORD style = WS_VISIBLE | WS_CHILD;
-    DWORD exStyle = WS_EX_STATICEDGE;
+    DWORD style = WS_VISIBLE | WS_CHILD | WS_BORDER;
+    DWORD exStyle = 0;
     int dy = iconDy + 2;
     // Size textSize = HwndMeasureText(win->hwndFrame, L"M", hfont);
     HWND findBg =
         CreateWindowEx(exStyle, WC_STATIC, L"", style, 0, 1, findBoxDx, dy, p, (HMENU) nullptr, hmod, nullptr);
 
-    int dx = findBoxDx - 2 * GetSystemMetrics(SM_CXEDGE);
     style = WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL;
     // dy = iconDy + DpiScale(win->hwndFrame, 2);
     dy = iconDy;
     exStyle = 0;
-    HWND find = CreateWindowExW(exStyle, WC_EDIT, L"", style, 0, 1, dx, dy, p, (HMENU) nullptr, hmod, nullptr);
+    HWND find = CreateWindowExW(exStyle, WC_EDIT, L"", style, 0, 1, findBoxDx, dy, p, (HMENU) nullptr, hmod, nullptr);
 
     style = WS_VISIBLE | WS_CHILD;
     HWND label = CreateWindowExW(0, WC_STATIC, L"", style, 0, 1, 0, 0, p, (HMENU) nullptr, hmod, nullptr);
@@ -696,14 +710,14 @@ static void CreatePageBox(MainWindow* win, HFONT font, int iconDy) {
     auto h = GetModuleHandle(nullptr);
     int dx = boxWidth;
     int dy = iconDy + 2;
-    DWORD exStyle = WS_EX_STATICEDGE;
-    HWND pageBg =
-        CreateWindowExW(exStyle, WC_STATICW, L"", style, 0, 1, dx, dy, hwndToolbar, (HMENU) nullptr, h, nullptr);
+    DWORD exStyle = 0;
+    HWND pageBg = CreateWindowExW(exStyle, WC_STATICW, L"", style | WS_BORDER, 0, 1, dx, dy, hwndToolbar,
+                                  (HMENU) nullptr, h, nullptr);
     HWND label = CreateWindowExW(0, WC_STATICW, L"", style, 0, 1, 0, 0, hwndToolbar, (HMENU) nullptr, h, nullptr);
     HWND total = CreateWindowExW(0, WC_STATICW, L"", style, 0, 1, 0, 0, hwndToolbar, (HMENU) nullptr, h, nullptr);
 
     style = WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | ES_NUMBER | ES_RIGHT;
-    dx = boxWidth - 2 * GetSystemMetrics(SM_CXEDGE);
+    dx = boxWidth - DpiScale(hwndFrame, 4); // 4 pixels padding on the right side of the text box
     dy = iconDy;
     exStyle = 0;
     HWND page = CreateWindowExW(exStyle, WC_EDIT, L"0", style, 0, 1, dx, dy, hwndToolbar, (HMENU) nullptr, h, nullptr);
@@ -820,6 +834,7 @@ void CreateToolbar(MainWindow* win) {
     dwStyle |= CCS_NODIVIDER | CCS_NOPARENTALIGN | WS_VISIBLE;
     win->hwndReBar = CreateWindowExW(WS_EX_TOOLWINDOW, REBARCLASSNAME, nullptr, dwStyle, 0, 0, 0, 0, hwndParent,
                                      (HMENU)IDC_REBAR, hinst, nullptr);
+    SetWindowSubclass(win->hwndReBar, BgSubclassProc, 0, 0);
 
     REBARINFO rbi{};
     rbi.cbSize = sizeof(REBARINFO);

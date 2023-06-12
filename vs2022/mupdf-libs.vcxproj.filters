@@ -4,9 +4,6 @@
     <Filter Include="extract">
       <UniqueIdentifier>{80E8D782-ECC7-561E-F5DF-E1F4613EBD7F}</UniqueIdentifier>
     </Filter>
-    <Filter Include="extract\include">
-      <UniqueIdentifier>{F38F0569-5F1B-732D-682C-F621D436CF2D}</UniqueIdentifier>
-    </Filter>
     <Filter Include="extract\src">
       <UniqueIdentifier>{97E6B385-039C-2C7B-8C90-2652F844237F}</UniqueIdentifier>
     </Filter>
@@ -93,21 +90,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\ext\extract\include\extract.h">
-      <Filter>extract\include</Filter>
-    </ClInclude>
-    <ClInclude Include="..\ext\extract\include\extract_alloc.h">
-      <Filter>extract\include</Filter>
-    </ClInclude>
-    <ClInclude Include="..\ext\extract\include\extract_buffer.h">
-      <Filter>extract\include</Filter>
-    </ClInclude>
-    <ClInclude Include="..\ext\extract\include\extract_buffer_impl.h">
-      <Filter>extract\include</Filter>
-    </ClInclude>
-    <ClInclude Include="..\ext\extract\include\extract_compat_inline.h">
-      <Filter>extract\include</Filter>
-    </ClInclude>
     <ClInclude Include="..\ext\extract\src\astring.h">
       <Filter>extract\src</Filter>
     </ClInclude>
@@ -121,6 +103,9 @@
       <Filter>extract\src</Filter>
     </ClInclude>
     <ClInclude Include="..\ext\extract\src\html.h">
+      <Filter>extract\src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\ext\extract\src\json.h">
       <Filter>extract\src</Filter>
     </ClInclude>
     <ClInclude Include="..\ext\extract\src\mem.h">
@@ -297,6 +282,9 @@
     <ClInclude Include="..\ext\openjpeg\src\lib\openjp2\t1.h">
       <Filter>openjpeg\src\lib\openjp2</Filter>
     </ClInclude>
+    <ClInclude Include="..\ext\openjpeg\src\lib\openjp2\t1_ht_luts.h">
+      <Filter>openjpeg\src\lib\openjp2</Filter>
+    </ClInclude>
     <ClInclude Include="..\ext\openjpeg\src\lib\openjp2\t1_luts.h">
       <Filter>openjpeg\src\lib\openjp2</Filter>
     </ClInclude>
@@ -347,6 +335,9 @@
     <ClCompile Include="..\ext\extract\src\join.c">
       <Filter>extract\src</Filter>
     </ClCompile>
+    <ClCompile Include="..\ext\extract\src\json.c">
+      <Filter>extract\src</Filter>
+    </ClCompile>
     <ClCompile Include="..\ext\extract\src\mem.c">
       <Filter>extract\src</Filter>
     </ClCompile>
@@ -387,6 +378,9 @@
       <Filter>freetype\src\base</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\freetype\src\base\ftdebug.c">
+      <Filter>freetype\src\base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\freetype\src\base\ftfstype.c">
       <Filter>freetype\src\base</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\freetype\src\base\ftgasp.c">
@@ -548,42 +542,6 @@
     <ClCompile Include="..\ext\harfbuzz\src\hb-ot-name.cc">
       <Filter>harfbuzz\src</Filter>
     </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-arabic.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-default.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-hangul.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-hebrew.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-indic-table.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-indic.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-khmer.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-myanmar.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-syllabic.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-thai.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-use.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-complex-vowel-constraints.cc">
-      <Filter>harfbuzz\src</Filter>
-    </ClCompile>
     <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape-fallback.cc">
       <Filter>harfbuzz\src</Filter>
     </ClCompile>
@@ -591,6 +549,42 @@
       <Filter>harfbuzz\src</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shape.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-arabic.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-default.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-hangul.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-hebrew.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-indic-table.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-indic.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-khmer.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-myanmar.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-syllabic.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-thai.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-use.cc">
+      <Filter>harfbuzz\src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\harfbuzz\src\hb-ot-shaper-vowel-constraints.cc">
       <Filter>harfbuzz\src</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\harfbuzz\src\hb-ot-tag.cc">
@@ -764,7 +758,52 @@
     <ClCompile Include="..\ext\libjpeg-turbo\jaricom.c">
       <Filter>libjpeg-turbo</Filter>
     </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcapimin.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcapistd.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcarith.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jccoefct.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jccolor.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcdctmgr.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jchuff.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcinit.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcmainct.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcmarker.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcmaster.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
     <ClCompile Include="..\ext\libjpeg-turbo\jcomapi.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcparam.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcphuff.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcprepct.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jcsample.c">
       <Filter>libjpeg-turbo</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\libjpeg-turbo\jdapimin.c">
@@ -857,6 +896,9 @@
     <ClCompile Include="..\ext\libjpeg-turbo\jquant2.c">
       <Filter>libjpeg-turbo</Filter>
     </ClCompile>
+    <ClCompile Include="..\ext\libjpeg-turbo\jsimd_none.c">
+      <Filter>libjpeg-turbo</Filter>
+    </ClCompile>
     <ClCompile Include="..\ext\libjpeg-turbo\jutils.c">
       <Filter>libjpeg-turbo</Filter>
     </ClCompile>
@@ -885,6 +927,9 @@
       <Filter>openjpeg\src\lib\openjp2</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\openjpeg\src\lib\openjp2\function_list.c">
+      <Filter>openjpeg\src\lib\openjp2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\openjpeg\src\lib\openjp2\ht_dec.c">
       <Filter>openjpeg\src\lib\openjp2</Filter>
     </ClCompile>
     <ClCompile Include="..\ext\openjpeg\src\lib\openjp2\image.c">

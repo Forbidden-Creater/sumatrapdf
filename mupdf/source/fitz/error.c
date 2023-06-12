@@ -35,10 +35,6 @@
 #endif
 #endif
 
-#if WASM_SKIP_TRY_CATCH
-#include "emscripten.h"
-#endif
-
 #ifdef __ANDROID__
 #define USE_ANDROID_LOG
 #include <android/log.h>
@@ -178,8 +174,6 @@ fz_error_cb *fz_error_callback(fz_context *ctx, void **user)
 
 FZ_NORETURN static void throw(fz_context *ctx, int code)
 {
-#if !WASM_SKIP_TRY_CATCH
-
 	if (ctx->error.top > ctx->error.stack_base)
 	{
 		ctx->error.top->state += 2;
@@ -204,16 +198,6 @@ FZ_NORETURN static void throw(fz_context *ctx, int code)
 		*p = 0;
 		exit(EXIT_FAILURE);
 	}
-
-#else
-		EM_ASM({
-			let message = UTF8ToString($0);
-			console.error("mupdf:", message);
-			throw new libmupdf.MupdfError(message);
-		}, ctx->error.message);
-		// Unreachable
-		exit(EXIT_FAILURE);
-#endif
 }
 
 fz_jmp_buf *fz_push_try(fz_context *ctx)
@@ -315,6 +299,13 @@ FZ_NORETURN void fz_rethrow(fz_context *ctx)
 {
 	assert(ctx && ctx->error.errcode >= FZ_ERROR_NONE);
 	throw(ctx, ctx->error.errcode);
+}
+
+void fz_morph_error(fz_context *ctx, int fromerr, int toerr)
+{
+	assert(ctx && ctx->error.errcode >= FZ_ERROR_NONE);
+	if (ctx->error.errcode == fromerr)
+		ctx->error.errcode = toerr;
 }
 
 void fz_rethrow_if(fz_context *ctx, int err)

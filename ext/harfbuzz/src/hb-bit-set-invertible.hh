@@ -80,7 +80,7 @@ struct hb_bit_set_invertible_t
     next (&v);
     return v == INVALID;
   }
-  uint32_t hash () const { return s.hash () ^ inverted; }
+  uint32_t hash () const { return s.hash () ^ (uint32_t) inverted; }
 
   hb_codepoint_t get_min () const
   {
@@ -100,7 +100,7 @@ struct hb_bit_set_invertible_t
 
   void add (hb_codepoint_t g) { unlikely (inverted) ? s.del (g) : s.add (g); }
   bool add_range (hb_codepoint_t a, hb_codepoint_t b)
-  { return unlikely (inverted) ? (s.del_range (a, b), true) : s.add_range (a, b); }
+  { return unlikely (inverted) ? ((void) s.del_range (a, b), true) : s.add_range (a, b); }
 
   template <typename T>
   void add_array (const T *array, unsigned int count, unsigned int stride=sizeof(T))
@@ -123,10 +123,8 @@ struct hb_bit_set_invertible_t
   bool get (hb_codepoint_t g) const { return s.get (g) ^ inverted; }
 
   /* Has interface. */
-  static constexpr bool SENTINEL = false;
-  typedef bool value_t;
-  value_t operator [] (hb_codepoint_t k) const { return get (k); }
-  bool has (hb_codepoint_t k) const { return (*this)[k] != SENTINEL; }
+  bool operator [] (hb_codepoint_t k) const { return get (k); }
+  bool has (hb_codepoint_t k) const { return (*this)[k]; }
   /* Predicate. */
   bool operator () (hb_codepoint_t k) const { return has (k); }
 

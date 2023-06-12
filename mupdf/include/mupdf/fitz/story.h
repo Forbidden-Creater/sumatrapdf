@@ -49,7 +49,7 @@
 */
 
 
-typedef struct fz_story_s fz_story;
+typedef struct fz_story fz_story;
 
 /*
 	Create a text story using styled html.
@@ -142,6 +142,9 @@ typedef struct
 
 	/* The id for this element. */
 	const char *id;
+
+	/* The href for this element. */
+	const char *href;
 
 	/* The rectangle for this element. */
 	fz_rect rect;
